@@ -19,6 +19,13 @@ trap 'rm -rf "$TMP"' EXIT
 mkdir -p "$TMP/opencode"
 printf 'USER SETTINGS\n' > "$TMP/opencode/opencode.json"
 
+# The fixture must be reachable by the container's uid 1000 regardless of the
+# developer's umask and of how the engine maps UIDs. Rootless podman maps the
+# host user to container root, so a umask-077 fixture is invisible to uid 1000
+# and the test would fail for reasons that have nothing to do with seeding.
+# These are ephemeral temp files, so wide permissions are safe here.
+chmod -R 0777 "$TMP"
+
 OUT=$("$ENGINE" run --rm \
   -v "$TMP:/home/opencode/.config:Z" \
   "$IMAGE" cat /home/opencode/.config/opencode/opencode.json 2>/dev/null)
@@ -27,6 +34,19 @@ if [ "$OUT" = "USER SETTINGS" ]; then
   echo "ok   mounted opencode.json survived seeding"
 else
   echo "FAIL mounted opencode.json was clobbered (got: ${OUT:-<empty>})"
+  RC=1
+fi
+
+# The check above would also pass if seeding never ran at all. Prove it did:
+# AGENTS.md was NOT in the mount, so it must have been filled in from defaults.
+SEEDED=$("$ENGINE" run --rm \
+  -v "$TMP:/home/opencode/.config:Z" \
+  "$IMAGE" sh -c 'test -f /home/opencode/.config/opencode/AGENTS.md && echo yes || echo no' 2>/dev/null)
+
+if [ "$SEEDED" = "yes" ]; then
+  echo "ok   seeding still filled in files absent from the mount"
+else
+  echo "FAIL seeding did not run against the mount (AGENTS.md missing)"
   RC=1
 fi
 
