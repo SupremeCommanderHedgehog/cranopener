@@ -1,0 +1,22 @@
+{
+  "1.9.0": {
+    "stable": true,
+    "files": [
+      { "triplet": "x86_64-linux-gnu", "url": "https://example.invalid/julia-1.9.0.tar.gz", "sha256": "aaa" }
+    ]
+  },
+  "1.2.0": {
+    "stable": true,
+    "files": [
+      { "triplet": "x86_64-linux-gnu", "url": "https://example.invalid/julia-1.2.0.tar.gz", "sha256": "ddd" }
+    ]
+  },
+  "1.13.0-rc1": { "stable": false, "files": [] },
+  "1.12.6": {
+    "stable": true,
+    "files": [
+      { "triplet": "aarch64-linux-gnu", "url": "https://example.invalid/julia-1.12.6-arm.tar.gz", "sha256": "bbb" },
+      { "triplet": "x86_64-linux-gnu", "url": "https://example.invalid/julia-1.12.6.tar.gz", "sha256": "ccc" }
+    ]
+  }
+}
