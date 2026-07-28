@@ -34,6 +34,9 @@ check "npm present"            npm --version
 check "npx present"            npx --version
 check "pnpm present"           pnpm --version
 check "uv present"             uv --version
+check "go present"              go version
+check "rustc present"          rustc --version
+check "cargo present"          cargo --version
 
 # Config seeding must have run via the entrypoint.
 check "seeded opencode.json"   test -f "$HOME/.config/opencode/opencode.json"

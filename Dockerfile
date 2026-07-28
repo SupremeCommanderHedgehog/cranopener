@@ -76,6 +76,27 @@ RUN set -eux; \
     rm /tmp/uv-install.sh; \
     uv --version
 
+# --- Go ---
+ARG GO_VERSION
+ENV PATH=/usr/local/go/bin:$PATH
+RUN set -eux; \
+    test -n "${GO_VERSION}"; \
+    curl -fsSL -o /tmp/go.tar.gz "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz"; \
+    tar -C /usr/local -xzf /tmp/go.tar.gz; \
+    rm /tmp/go.tar.gz; \
+    go version
+
+# --- Rust ---
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH=/usr/local/cargo/bin:$PATH
+RUN set -eux; \
+    curl -fsSL https://sh.rustup.rs -o /tmp/rustup.sh; \
+    sh /tmp/rustup.sh -y --profile minimal --no-modify-path; \
+    rm /tmp/rustup.sh; \
+    chmod -R a+w "$RUSTUP_HOME" "$CARGO_HOME"; \
+    rustc --version; cargo --version
+
 # --- config defaults and entrypoint (last: changes most often) ---
 # COPY preserves source file modes; the build context is synced from a
 # Windows host over tar/ssh and can land with owner-only (600/700) perms,
