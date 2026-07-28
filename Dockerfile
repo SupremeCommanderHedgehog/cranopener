@@ -113,6 +113,21 @@ RUN set -eux; \
     chmod -R a+rX "${DOTNET_ROOT}"; \
     dotnet --version; dotnet fsi --version
 
+# --- Julia ---
+ARG JULIA_VERSION
+ARG JULIA_URL
+ARG JULIA_SHA256
+ENV PATH=/opt/julia/bin:$PATH
+RUN set -eux; \
+    test -n "${JULIA_URL}"; \
+    test -n "${JULIA_SHA256}"; \
+    curl -fsSL -o /tmp/julia.tar.gz "${JULIA_URL}"; \
+    echo "${JULIA_SHA256}  /tmp/julia.tar.gz" | sha256sum -c -; \
+    mkdir -p /opt/julia; \
+    tar -xzf /tmp/julia.tar.gz -C /opt/julia --strip-components=1; \
+    rm /tmp/julia.tar.gz; \
+    julia --version
+
 # --- config defaults and entrypoint (last: changes most often) ---
 # COPY preserves source file modes; the build context is synced from a
 # Windows host over tar/ssh and can land with owner-only (600/700) perms,
