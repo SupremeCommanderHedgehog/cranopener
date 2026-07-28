@@ -97,6 +97,22 @@ RUN set -eux; \
     chmod -R a+w "$RUSTUP_HOME" "$CARGO_HOME"; \
     rustc --version; cargo --version
 
+# --- .NET SDK (C# and F#) ---
+ARG DOTNET_CHANNEL=LTS
+ENV DOTNET_ROOT=/usr/local/dotnet \
+    DOTNET_CLI_TELEMETRY_OPTOUT=1 \
+    DOTNET_NOLOGO=1 \
+    PATH=/usr/local/dotnet:$PATH
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends libicu76; \
+    rm -rf /var/lib/apt/lists/*; \
+    curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh; \
+    bash /tmp/dotnet-install.sh --channel "${DOTNET_CHANNEL}" --install-dir "${DOTNET_ROOT}"; \
+    rm /tmp/dotnet-install.sh; \
+    chmod -R a+rX "${DOTNET_ROOT}"; \
+    dotnet --version; dotnet fsi --version
+
 # --- config defaults and entrypoint (last: changes most often) ---
 # COPY preserves source file modes; the build context is synced from a
 # Windows host over tar/ssh and can land with owner-only (600/700) perms,

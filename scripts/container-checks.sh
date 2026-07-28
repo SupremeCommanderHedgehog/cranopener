@@ -37,6 +37,8 @@ check "uv present"             uv --version
 check "go present"              go version
 check "rustc present"          rustc --version
 check "cargo present"          cargo --version
+check "dotnet present"         dotnet --version
+check "F# interactive present" dotnet fsi --version
 
 # Config seeding must have run via the entrypoint.
 check "seeded opencode.json"   test -f "$HOME/.config/opencode/opencode.json"
