@@ -9,8 +9,19 @@ parse_opencode_version() {
   jq -r '.tag_name' | sed 's/^v//'
 }
 
+# Sort numerically rather than trusting the API's ordering: taking the first
+# stable entry would silently ship an older Go if go.dev ever reorders, and
+# every assertion would still pass.
 parse_go_version() {
-  jq -r '[ .[] | select(.stable == true) ][0].version' | sed 's/^go//'
+  jq -r '
+    [ .[]
+      | select(.stable == true)
+      | .version
+      | ltrimstr("go")
+      | select(test("^[0-9]+[.][0-9]+([.][0-9]+)?$")) ]
+    | sort_by(split(".") | map(tonumber))
+    | last
+  '
 }
 
 # Character class [.] instead of \. — survives shell quoting layers.
@@ -53,6 +64,18 @@ main() {
   [ -n "$opencode" ] || { echo "failed to resolve opencode version" >&2; exit 1; }
   [ -n "$go" ]       || { echo "failed to resolve go version" >&2; exit 1; }
   [ -n "$julia_ver" ]|| { echo "failed to resolve julia version" >&2; exit 1; }
+
+  [ -n "$julia_asset" ] || { echo "failed to resolve julia asset for $julia_ver" >&2; exit 1; }
+  if [ "$(printf '%s\n' "$julia_asset" | wc -l)" -ne 1 ]; then
+    echo "julia asset selector matched multiple files for $julia_ver" >&2
+    exit 1
+  fi
+
+  echo "$opencode"  | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+' || { echo "bad opencode version: $opencode" >&2; exit 1; }
+  echo "$go"        | grep -qE '^[0-9]+\.[0-9]+' || { echo "bad go version: $go" >&2; exit 1; }
+  echo "$julia_ver" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "bad julia version: $julia_ver" >&2; exit 1; }
+  echo "${julia_asset%% *}" | grep -qE '^https://' || { echo "bad julia url" >&2; exit 1; }
+  echo "${julia_asset##* }" | grep -qE '^[0-9a-f]{64}$' || { echo "bad julia sha256" >&2; exit 1; }
 
   printf 'OPENCODE_VERSION=%s\n' "$opencode"
   printf 'GO_VERSION=%s\n' "$go"

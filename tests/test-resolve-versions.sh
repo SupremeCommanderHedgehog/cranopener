@@ -16,6 +16,10 @@ fi
 # shellcheck source=scripts/resolve-versions.sh
 . scripts/resolve-versions.sh
 
+# resolve-versions.sh sets -e when sourced; the suite deliberately does not use
+# it, so every assertion runs and reports rather than aborting on the first.
+set +e
+
 F=tests/fixtures
 
 assert_eq "opencode version strips the v prefix" \
@@ -23,6 +27,9 @@ assert_eq "opencode version strips the v prefix" \
 
 assert_eq "go picks newest stable and strips the go prefix" \
   "1.26.5" "$(parse_go_version < "$F/go-dl.json")"
+
+assert_eq "go selection does not depend on API ordering" \
+  "1.26.5" "$(parse_go_version < "$F/go-dl-reordered.json")"
 
 assert_eq "julia sorts numerically, so 1.12.6 beats 1.9.0" \
   "1.12.6" "$(parse_julia_version < "$F/julia-versions.json")"
