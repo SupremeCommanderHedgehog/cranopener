@@ -51,5 +51,19 @@ else
 fi
 
 echo
+echo "=== version labels ==="
+for lbl in org.opencontainers.image.version \
+           dev.cranopener.go.version \
+           dev.cranopener.julia.version; do
+  val=$("$ENGINE" inspect --format "{{ index .Config.Labels \"$lbl\" }}" "$IMAGE" 2>/dev/null)
+  if [ -n "$val" ] && [ "$val" != "<no value>" ]; then
+    echo "ok   $lbl = $val"
+  else
+    echo "FAIL $lbl is empty"
+    RC=1
+  fi
+done
+
+echo
 if [ "$RC" -eq 0 ]; then echo "SMOKE TEST PASSED"; else echo "SMOKE TEST FAILED"; fi
 exit "$RC"

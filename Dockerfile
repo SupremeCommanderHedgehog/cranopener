@@ -103,6 +103,10 @@ ENV DOTNET_ROOT=/usr/local/dotnet \
     DOTNET_CLI_TELEMETRY_OPTOUT=1 \
     DOTNET_NOLOGO=1 \
     PATH=/usr/local/dotnet:$PATH
+# libicu is required: trixie-slim ships no ICU, and .NET aborts at startup with
+# "Couldn't find a valid ICU package installed" without it. The number in the
+# package name tracks Debian's ICU soversion, so moving off trixie will require
+# changing it — the dotnet assertion in the smoke test is what catches that.
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends libicu76; \
@@ -149,3 +153,21 @@ WORKDIR /workspace
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["opencode"]
+
+# --- provenance labels (last: cheap layer, changes every build) ---
+ARG OPENCODE_VERSION
+ARG GO_VERSION
+ARG JULIA_VERSION
+ARG NODE_MAJOR
+ARG DOTNET_CHANNEL
+LABEL org.opencontainers.image.title="cranopener" \
+      org.opencontainers.image.description="opencode with a polyglot toolchain" \
+      org.opencontainers.image.source="https://github.com/SupremeCommanderHedgehog/cranopener" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.base.name="docker.io/library/debian:trixie-slim" \
+      org.opencontainers.image.version="${OPENCODE_VERSION}" \
+      dev.cranopener.opencode.version="${OPENCODE_VERSION}" \
+      dev.cranopener.go.version="${GO_VERSION}" \
+      dev.cranopener.julia.version="${JULIA_VERSION}" \
+      dev.cranopener.node.major="${NODE_MAJOR}" \
+      dev.cranopener.dotnet.channel="${DOTNET_CHANNEL}"
