@@ -28,6 +28,7 @@ check "make present"           make --version
 check "cmake present"          cmake --version
 check "python3 present"        python3 --version
 check "opencode present"       opencode --version
+check "gh present"             gh --version
 
 # Config seeding must have run via the entrypoint.
 check "seeded opencode.json"   test -f "$HOME/.config/opencode/opencode.json"
