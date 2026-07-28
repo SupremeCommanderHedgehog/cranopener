@@ -33,6 +33,7 @@ check "node present"           node --version
 check "npm present"            npm --version
 check "npx present"            npx --version
 check "pnpm present"           pnpm --version
+check "uv present"             uv --version
 
 # Config seeding must have run via the entrypoint.
 check "seeded opencode.json"   test -f "$HOME/.config/opencode/opencode.json"

@@ -69,6 +69,13 @@ RUN set -eux; \
     rm -rf /var/lib/apt/lists/*; \
     node --version; pnpm --version
 
+# --- uv ---
+RUN set -eux; \
+    curl -fsSL https://astral.sh/uv/install.sh -o /tmp/uv-install.sh; \
+    UV_INSTALL_DIR=/usr/local/bin sh /tmp/uv-install.sh; \
+    rm /tmp/uv-install.sh; \
+    uv --version
+
 # --- config defaults and entrypoint (last: changes most often) ---
 # COPY preserves source file modes; the build context is synced from a
 # Windows host over tar/ssh and can land with owner-only (600/700) perms,
