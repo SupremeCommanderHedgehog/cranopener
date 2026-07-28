@@ -27,11 +27,18 @@ concurrency:
   group: build-${{ github.ref }}
   cancel-in-progress: true
 
+# Least privilege by default; jobs opt into more only where they need it.
+permissions:
+  contents: read
+
 jobs:
   unit-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       # The resolver tests skip themselves when jq is absent, so CI must prove
       # jq exists — otherwise a silent skip would look identical to a pass.
       - name: Assert jq is available
@@ -42,13 +49,14 @@ jobs:
   build:
     needs: unit-tests
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     permissions:
       contents: read
       packages: write
       attestations: write
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Free runner disk space
         run: |
@@ -63,7 +71,7 @@ jobs:
           echo "ref=ghcr.io/${owner}/cranopener" >> "$GITHUB_OUTPUT"
 
       - name: Lint Dockerfile
-        uses: hadolint/hadolint-action@v3.1.0
+        uses: hadolint/hadolint-action@54c9adbab1582c2ef04b2016b760714a4bfde3cf # v3.1.0
         with:
           dockerfile: Dockerfile
           config: .hadolint.yaml
@@ -75,18 +83,15 @@ jobs:
         run: |
           bash scripts/resolve-versions.sh | tee -a "$GITHUB_OUTPUT"
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
-      - name: Log in to GHCR
-        if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build image
-        uses: docker/build-push-action@v6
+      # ---------------------------------------------------------------------
+      # Pull requests: build locally and smoke test. Never push, never write
+      # cache — a fork PR must not be able to influence what main publishes.
+      # ---------------------------------------------------------------------
+      - name: Build image (pull request)
+        if: github.event_name == 'pull_request'
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           load: true
@@ -98,26 +103,39 @@ jobs:
             JULIA_URL=${{ steps.versions.outputs.JULIA_URL }}
             JULIA_SHA256=${{ steps.versions.outputs.JULIA_SHA256 }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
 
-      - name: Smoke test
+      - name: Smoke test (pull request)
+        if: github.event_name == 'pull_request'
         env:
           CONTAINER_ENGINE: docker
           EXPECT_OPENCODE_VERSION: ${{ steps.versions.outputs.OPENCODE_VERSION }}
         run: bash scripts/smoke-test.sh cranopener:ci
 
-      - name: Push image
+      # ---------------------------------------------------------------------
+      # Everything else: push ONCE to a staging tag, smoke test that exact
+      # digest, then promote the tested digest to the release tags.
+      #
+      # This image pins no tool versions by design, so building a second time
+      # in order to push could publish a different toolchain than the one that
+      # was tested. Building once and promoting by digest makes it impossible
+      # to publish anything other than the artifact that passed.
+      # ---------------------------------------------------------------------
+      - name: Log in to GHCR
         if: github.event_name != 'pull_request'
-        id: push
-        uses: docker/build-push-action@v6
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push staging image
+        if: github.event_name != 'pull_request'
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           push: true
-          tags: |
-            ${{ steps.img.outputs.ref }}:latest
-            ${{ steps.img.outputs.ref }}:${{ steps.versions.outputs.OPENCODE_VERSION }}
-            ${{ steps.img.outputs.ref }}:${{ steps.versions.outputs.OPENCODE_VERSION }}-${{ github.sha }}
-            ${{ steps.img.outputs.ref }}:sha-${{ github.sha }}
+          tags: ${{ steps.img.outputs.ref }}:staging
           build-args: |
             OPENCODE_VERSION=${{ steps.versions.outputs.OPENCODE_VERSION }}
             GO_VERSION=${{ steps.versions.outputs.GO_VERSION }}
@@ -125,15 +143,42 @@ jobs:
             JULIA_URL=${{ steps.versions.outputs.JULIA_URL }}
             JULIA_SHA256=${{ steps.versions.outputs.JULIA_SHA256 }}
           cache-from: type=gha
+          cache-to: type=gha,mode=max
           provenance: true
           sbom: true
 
+      - name: Smoke test the exact pushed digest
+        if: github.event_name != 'pull_request'
+        env:
+          CONTAINER_ENGINE: docker
+          EXPECT_OPENCODE_VERSION: ${{ steps.versions.outputs.OPENCODE_VERSION }}
+        run: |
+          set -euo pipefail
+          TESTED="${{ steps.img.outputs.ref }}@${{ steps.build.outputs.digest }}"
+          echo "testing $TESTED"
+          docker pull "$TESTED"
+          bash scripts/smoke-test.sh "$TESTED"
+
+      - name: Promote the tested digest to release tags
+        if: github.event_name != 'pull_request'
+        run: |
+          set -euo pipefail
+          REF='${{ steps.img.outputs.ref }}'
+          VER='${{ steps.versions.outputs.OPENCODE_VERSION }}'
+          SHA='${{ github.sha }}'
+          docker buildx imagetools create \
+            --tag "${REF}:latest" \
+            --tag "${REF}:${VER}" \
+            --tag "${REF}:${VER}-${SHA}" \
+            --tag "${REF}:sha-${SHA}" \
+            "${REF}@${{ steps.build.outputs.digest }}"
+
       - name: Attest build provenance
         if: github.event_name != 'pull_request'
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
           subject-name: ${{ steps.img.outputs.ref }}
-          subject-digest: ${{ steps.push.outputs.digest }}
+          subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
 
       - name: Job summary
@@ -147,4 +192,6 @@ jobs:
             echo "| opencode | ${{ steps.versions.outputs.OPENCODE_VERSION }} |"
             echo "| Go | ${{ steps.versions.outputs.GO_VERSION }} |"
             echo "| Julia | ${{ steps.versions.outputs.JULIA_VERSION }} |"
+            echo ""
+            echo "Digest: \`${{ steps.build.outputs.digest }}\`"
           } >> "$GITHUB_STEP_SUMMARY"

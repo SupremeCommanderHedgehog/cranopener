@@ -91,3 +91,36 @@ environment via `CRANOPENER_BUILD_HOST`, `CRANOPENER_BUILD_KEY`, and
 - `linux/amd64` only. Apple Silicon runs it under emulation.
 - The first pull is large.
 - Builds are not byte-reproducible by design; labels record what shipped.
+
+## Security
+
+See [SECURITY.md](SECURITY.md) for reporting and for the security-relevant
+design decisions. Images carry signed provenance, so you can verify one was
+actually built by this repository:
+
+```bash
+gh attestation verify \
+  oci://ghcr.io/supremecommanderhedgehog/cranopener:latest \
+  --owner SupremeCommanderHedgehog
+```
+
+## Licensing
+
+Two different things, licensed differently:
+
+- **This repository** — the Dockerfile, scripts, and workflow — is [MIT](LICENSE).
+- **The image it produces** is an aggregate of software from Debian and from
+  each toolchain's upstream, under many licenses including GPL-2.0, GPL-3.0,
+  Apache-2.0, BSD, MPL, and MIT. The image's
+  `org.opencontainers.image.licenses` label is therefore `NOASSERTION` — the
+  SPDX value meaning no single expression is being claimed. Bundling those
+  together is mere aggregation; each component remains under its own license,
+  and Debian publishes corresponding sources for everything it ships.
+
+If you need a license inventory for compliance, generate one from the image
+rather than trusting a summary:
+
+```bash
+docker run --rm ghcr.io/supremecommanderhedgehog/cranopener:latest \
+  sh -c 'for d in /usr/share/doc/*/copyright; do echo "$d"; done' | head
+```

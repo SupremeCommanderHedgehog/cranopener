@@ -1,0 +1,20 @@
+version: 2
+
+updates:
+  # Actions are pinned to commit SHAs for supply-chain safety, which makes them
+  # invisible to humans and impossible to update by hand. Dependabot is what
+  # keeps those pins current — without it, pinning silently freezes them on old,
+  # potentially vulnerable versions.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "ci"
+    labels:
+      - dependencies
+
+  # Nothing else here has a lockfile. Every tool version in the image is
+  # resolved at build time by scripts/resolve-versions.sh, so there is no
+  # manifest for Dependabot to track — the monthly rebuild is the update
+  # mechanism for image contents.
