@@ -11,15 +11,21 @@ REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 
 HOST="${CRANOPENER_BUILD_HOST:?set CRANOPENER_BUILD_HOST (see .env.example)}"
 KEY="${CRANOPENER_BUILD_KEY:?set CRANOPENER_BUILD_KEY (see .env.example)}"
-DIR="${CRANOPENER_BUILD_DIR:-\$HOME/cranopener}"
 TAG="${CRANOPENER_TAG:-cranopener:dev}"
 
 # Expand a leading ~ in the key path.
 KEY="${KEY/#\~/$HOME}"
 
+DIR="${CRANOPENER_BUILD_DIR:-}"
+if [ -z "$DIR" ]; then
+  DIR=$(ssh -i "$KEY" "$HOST" 'echo "$HOME/cranopener"')
+fi
+
 echo "==> syncing $REPO_ROOT -> $HOST:$DIR"
-ssh -i "$KEY" "$HOST" "mkdir -p '$DIR'"
-tar -C "$REPO_ROOT" --exclude=.git -czf - . \
+# Clear first: tar only overlays, so a file deleted locally would otherwise
+# linger on the build host and still be baked into the image.
+ssh -i "$KEY" "$HOST" "rm -rf '$DIR' && mkdir -p '$DIR'"
+tar -C "$REPO_ROOT" --exclude=.git --exclude=.env -czf - . \
   | ssh -i "$KEY" "$HOST" "tar -xzf - -C '$DIR'"
 
 echo "==> resolving versions on build host"
