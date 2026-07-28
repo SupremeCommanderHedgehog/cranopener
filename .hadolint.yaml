@@ -1,6 +1,11 @@
+# DL3008, DL3009, DL3015, DL3016: this image deliberately pins no versions —
+# it always resolves the latest apt packages and npm globals (pnpm) at build
+# time, by design, so the image stays zero-maintenance. The OCI provenance
+# labels record what actually got resolved into each build.
 ignored:
   - DL3008
   - DL3009
   - DL3015
+  - DL3016
 trustedRegistries:
   - docker.io

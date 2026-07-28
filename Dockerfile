@@ -24,6 +24,10 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8
 
+# curl | bash pipelines appear below; without pipefail a failed download still
+# reports success and produces a layer silently missing the tool.
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
 # --- core toolchain ---
 RUN set -eux; \
     apt-get update; \
@@ -48,7 +52,8 @@ RUN set -eux; \
 
 # --- GitHub CLI ---
 RUN set -eux; \
-    mkdir -p -m 0755 /etc/apt/keyrings; \
+    mkdir -p /etc/apt/keyrings; \
+    chmod 0755 /etc/apt/keyrings; \
     curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
       -o /etc/apt/keyrings/githubcli-archive-keyring.gpg; \
     chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg; \
