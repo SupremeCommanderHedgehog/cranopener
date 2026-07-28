@@ -1,0 +1,15 @@
+# Everything in this repo is consumed by Linux — shell scripts run inside the
+# container, and the Dockerfile is built there. A CRLF line ending in a script
+# breaks the shebang at runtime with "bad interpreter: bash^M", which is an
+# obscure failure to debug. Force LF regardless of the developer's
+# core.autocrlf setting.
+* text=auto eol=lf
+
+*.sh      text eol=lf
+*.json    text eol=lf
+*.yml     text eol=lf
+*.yaml    text eol=lf
+*.md      text eol=lf
+Dockerfile text eol=lf
+.dockerignore text eol=lf
+.gitignore    text eol=lf

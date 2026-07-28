@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
 set -uo pipefail
 cd "$(dirname "$0")/.."
+
+# These tests exercise jq programs, so jq is a hard prerequisite. Report a
+# single clear skip rather than four identical assertion failures, which would
+# otherwise train the reader to ignore red output. CI asserts jq is present
+# before running the suite, so a skip here can never mask a real regression.
+if ! command -v jq >/dev/null 2>&1; then
+  printf 'SKIP %s: jq is not installed\n' "${0##*/}"
+  exit 0
+fi
+
 # shellcheck source=tests/lib/assert.sh
 . tests/lib/assert.sh
 # shellcheck source=scripts/resolve-versions.sh
