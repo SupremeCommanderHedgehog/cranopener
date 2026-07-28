@@ -20,8 +20,10 @@ RUN set -eux; \
 ########################  stage: runtime  ########################
 FROM debian:trixie-slim AS runtime
 
-ENV DEBIAN_FRONTEND=noninteractive \
-    LANG=C.UTF-8 \
+# Build-time only: as ENV this would persist into the shipped image and
+# suppress prompts for anyone running apt-get inside the container.
+ARG DEBIAN_FRONTEND=noninteractive
+ENV LANG=C.UTF-8 \
     LC_ALL=C.UTF-8
 
 # curl | bash pipelines appear below; without pipefail a failed download still
@@ -49,6 +51,12 @@ RUN set -eux; \
     useradd -u 1000 -g 1000 -m -s /bin/bash opencode; \
     mkdir -p /workspace; \
     chown opencode:opencode /workspace
+
+# The rustup/cargo installation itself stays read-only; cargo install writes
+# into the user's own CARGO_HOME instead of mutating the shared toolchain.
+ENV CARGO_HOME=/home/opencode/.cargo
+ENV PATH=/home/opencode/.cargo/bin:$PATH
+RUN mkdir -p /home/opencode/.cargo/bin && chown -R opencode:opencode /home/opencode/.cargo
 
 # --- GitHub CLI ---
 RUN set -eux; \
@@ -92,14 +100,18 @@ RUN set -eux; \
     go version
 
 # --- Rust ---
+# CARGO_HOME is intentionally NOT set here: it stays /home/opencode/.cargo
+# (set right after useradd) for this layer and the runtime image. The install
+# itself still targets /usr/local/cargo, via an `export` scoped to this RUN's
+# shell only, so it never touches the persisted image ENV.
 ENV RUSTUP_HOME=/usr/local/rustup \
-    CARGO_HOME=/usr/local/cargo \
     PATH=/usr/local/cargo/bin:$PATH
 RUN set -eux; \
+    export CARGO_HOME=/usr/local/cargo; \
     curl -fsSL https://sh.rustup.rs -o /tmp/rustup.sh; \
     sh /tmp/rustup.sh -y --profile minimal --no-modify-path; \
     rm /tmp/rustup.sh; \
-    chmod -R a+w "$RUSTUP_HOME" "$CARGO_HOME"; \
+    chmod -R a+rX "$RUSTUP_HOME" "$CARGO_HOME"; \
     rustc --version; cargo --version
 
 # --- .NET SDK (C# and F#) ---
@@ -168,7 +180,7 @@ ARG DOTNET_CHANNEL
 LABEL org.opencontainers.image.title="cranopener" \
       org.opencontainers.image.description="opencode with a polyglot toolchain" \
       org.opencontainers.image.source="https://github.com/SupremeCommanderHedgehog/cranopener" \
-      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.licenses="NOASSERTION" \
       org.opencontainers.image.base.name="docker.io/library/debian:trixie-slim" \
       org.opencontainers.image.version="${OPENCODE_VERSION}" \
       dev.cranopener.opencode.version="${OPENCODE_VERSION}" \

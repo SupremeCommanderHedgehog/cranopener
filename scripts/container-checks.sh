@@ -37,6 +37,10 @@ check "uv present"             uv --version
 check "go present"              go version
 check "rustc present"          rustc --version
 check "cargo present"          cargo --version
+check "cargo toolchain not world-writable" \
+  sh -c 'test ! -w /usr/local/cargo/bin/cargo'
+check "user cargo home is writable"        \
+  sh -c 'test -w "$CARGO_HOME"'
 check "dotnet present"         dotnet --version
 check "F# interactive present" dotnet fsi --version
 check "julia present"          julia --version

@@ -54,7 +54,9 @@ echo
 echo "=== version labels ==="
 for lbl in org.opencontainers.image.version \
            dev.cranopener.go.version \
-           dev.cranopener.julia.version; do
+           dev.cranopener.julia.version \
+           dev.cranopener.node.major \
+           dev.cranopener.dotnet.channel; do
   val=$("$ENGINE" inspect --format "{{ index .Config.Labels \"$lbl\" }}" "$IMAGE" 2>/dev/null)
   if [ -n "$val" ] && [ "$val" != "<no value>" ]; then
     echo "ok   $lbl = $val"
