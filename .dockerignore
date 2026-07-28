@@ -1,0 +1,13 @@
+.git
+.github
+.claude
+.env
+.env.*
+docs
+tests
+scripts/dev
+README.md
+.gitignore
+.dockerignore
+.hadolint.yaml
+**/.gitkeep

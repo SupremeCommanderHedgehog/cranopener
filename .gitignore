@@ -1,0 +1,33 @@
+# This repository is PUBLIC. Nothing here should reveal local infrastructure,
+# hostnames, key paths, or credentials.
+
+# Design docs and plans — they reference internal build hosts and key paths.
+docs/
+
+# Local agent/tool configuration.
+.claude/
+.opencode/
+AGENTS.local.md
+CLAUDE.local.md
+
+# Credentials and secrets.
+.env
+.env.*
+!.env.example
+auth.json
+*.pem
+*.key
+*.gpg
+*.asc
+id_*
+!id_*.md
+secrets.*
+
+# Local build scratch.
+*.tar.gz
+.versions
+*.log
+
+# OS noise.
+.DS_Store
+Thumbs.db
