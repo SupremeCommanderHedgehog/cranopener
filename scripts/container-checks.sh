@@ -40,6 +40,7 @@ check "cargo present"          cargo --version
 check "dotnet present"         dotnet --version
 check "F# interactive present" dotnet fsi --version
 check "julia present"          julia --version
+check "R present"              R --version
 
 # Config seeding must have run via the entrypoint.
 check "seeded opencode.json"   test -f "$HOME/.config/opencode/opencode.json"

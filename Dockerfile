@@ -128,6 +128,13 @@ RUN set -eux; \
     rm /tmp/julia.tar.gz; \
     julia --version
 
+# --- R ---
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends r-base; \
+    rm -rf /var/lib/apt/lists/*; \
+    R --version
+
 # --- config defaults and entrypoint (last: changes most often) ---
 # COPY preserves source file modes; the build context is synced from a
 # Windows host over tar/ssh and can land with owner-only (600/700) perms,
