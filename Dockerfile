@@ -59,6 +59,16 @@ RUN set -eux; \
     rm -rf /var/lib/apt/lists/*; \
     gh --version
 
+# --- Node.js ---
+ARG NODE_MAJOR=24
+RUN set -eux; \
+    curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash -; \
+    apt-get install -y --no-install-recommends nodejs; \
+    npm install -g pnpm; \
+    npm cache clean --force; \
+    rm -rf /var/lib/apt/lists/*; \
+    node --version; pnpm --version
+
 # --- config defaults and entrypoint (last: changes most often) ---
 # COPY preserves source file modes; the build context is synced from a
 # Windows host over tar/ssh and can land with owner-only (600/700) perms,

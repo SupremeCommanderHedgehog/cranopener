@@ -29,6 +29,10 @@ check "cmake present"          cmake --version
 check "python3 present"        python3 --version
 check "opencode present"       opencode --version
 check "gh present"             gh --version
+check "node present"           node --version
+check "npm present"            npm --version
+check "npx present"            npx --version
+check "pnpm present"           pnpm --version
 
 # Config seeding must have run via the entrypoint.
 check "seeded opencode.json"   test -f "$HOME/.config/opencode/opencode.json"
