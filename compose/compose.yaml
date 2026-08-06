@@ -15,6 +15,12 @@ services:
       # to litellm is plain HTTP on the internal network, so no certificate is
       # involved there -- hence litellm in NO_PROXY, or the corporate proxy
       # would be asked to route a container-internal name it cannot resolve.
+      # Config comes from the mounts above, so there is nothing to seed. Left
+      # unset, the entrypoint tries to populate a directory podman created
+      # root-owned for the bind mounts and warns on every single launch --
+      # noise that reads like a fault and sends people chasing it. Pointing the
+      # seed source at a path that does not exist makes it exit cleanly.
+      CRANOPENER_SEED_SRC: /nonexistent
       NODE_EXTRA_CA_CERTS: /etc/ssl/certs/extra-roots.pem
       HTTP_PROXY: ${HTTP_PROXY:-}
       HTTPS_PROXY: ${HTTPS_PROXY:-}
@@ -33,7 +39,14 @@ services:
       - ./certs/dod-roots.pem:/etc/ssl/certs/extra-roots.pem:ro
     healthcheck:
       # `up -d` returns once the container is created, not once it serves.
-      test: ["CMD", "curl", "-fsS", "http://localhost:4000/health/liveliness"]
+      #
+      # Uses python rather than curl: the litellm image ships no curl, and a
+      # healthcheck referencing a missing binary never reports healthy, so the
+      # symptom is a timeout with a running, perfectly functional gateway.
+      # /health/liveliness is the right probe because it answers without
+      # touching upstream endpoints -- /health tries to reach every configured
+      # provider and is red until real credentials exist.
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness', timeout=3)"]
       interval: 5s
       timeout: 3s
       retries: 12

@@ -95,16 +95,36 @@ if (-not $Direct) {
     # gateway takes seconds to load config and bind :4000, and without this
     # the first prompt of a fresh session fails with ECONNREFUSED -- a hard
     # failure in an unattended run rather than something anyone retries.
-    $deadline = (Get-Date).AddSeconds(60)
+    # Read the compose healthcheck rather than running a probe of our own.
+    #
+    # The obvious approach -- `compose exec litellm python3 -c "<urlopen>"` --
+    # runs through docker-compose.exe as a *Windows* process, and Windows
+    # Defender's command-line heuristic scores inline Python that opens a URL
+    # as a downloader: Trojan:Win32/Commando.A!ml, killed once per poll. It
+    # surfaces as "fork/exec ... Access is denied", which reads like an
+    # argument-quoting bug and is not one.
+    #
+    # The healthcheck runs the same probe inside the container, where Defender
+    # does not see it. Reading its result keeps readiness defined in one place
+    # and never builds a Windows command line that looks like a stager.
+    $filter = "label=com.docker.compose.project=$env:COMPOSE_PROJECT_NAME"
+    $deadline = (Get-Date).AddSeconds(90)
     $ready = $false
     while ((Get-Date) -lt $deadline) {
-        podman compose -f $composePath exec -T litellm `
-            curl -fsS http://localhost:4000/health/liveliness *> $null
-        if ($LASTEXITCODE -eq 0) { $ready = $true; break }
+        $name = podman ps --filter $filter `
+                          --filter 'label=com.docker.compose.service=litellm' `
+                          --format '{{.Names}}' | Select-Object -First 1
+        if ($name) {
+            $status = podman inspect --format '{{.State.Health.Status}}' $name 2>$null
+            if ($status -eq 'healthy') { $ready = $true; break }
+            if ($status -eq 'unhealthy') {
+                throw "gateway reported unhealthy. Check: podman logs $name"
+            }
+        }
         Start-Sleep -Seconds 2
     }
     if (-not $ready) {
-        throw "gateway did not become ready within 60s. Check: podman compose -f `"$composePath`" logs litellm"
+        throw "gateway did not become ready within 90s. Check: podman compose -f `"$composePath`" logs litellm"
     }
 }
 

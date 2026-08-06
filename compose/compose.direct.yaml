@@ -13,6 +13,9 @@ services:
       - ./opencode/opencode.direct.json:/home/opencode/.config/opencode/opencode.json:ro
       - ./opencode/AGENTS.md:/home/opencode/.config/opencode/AGENTS.md:ro
     environment:
+      # See compose.yaml: config comes from the mounts, so seeding has nothing
+      # to do and would warn on every launch.
+      CRANOPENER_SEED_SRC: /nonexistent
       NODE_EXTRA_CA_CERTS: /etc/ssl/certs/extra-roots.pem
       HTTP_PROXY: ${HTTP_PROXY:-}
       HTTPS_PROXY: ${HTTPS_PROXY:-}

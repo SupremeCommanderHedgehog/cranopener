@@ -83,9 +83,85 @@ write to `/workspace`** — see Task 11.
 Worth knowing for the proxied config: denying permissions is not a way to
 sandbox a session while keeping its tool schema intact.
 
+## Phase 1 end-to-end (Task 11) — verified 2026-08-05, Windows
+
+Run on the authoring machine, which does have podman after all.
+
+| | |
+|---|---|
+| podman | 5.8.2, WSL2 machine running |
+| `podman compose` provider | **docker-compose v5.1.4** (external) |
+| Rootless | **false** — rootful *inside* the WSL VM |
+| Direct mode | pass |
+| Gateway health | pass |
+| Proxied mode, cold start | pass, 13s |
+| opencode to gateway over the compose network | pass, HTTP 200 |
+| Project isolation | pass, distinct names and workspaces |
+| `-Down` | pass, containers and network removed |
+
+**Bind mounts need no UID mapping on Windows.** The WSL mount presents
+everything as `opencode`-owned `drwxrwxrwx`; the container writes and the file
+appears on the Windows side. The `keep-id` problem that blocked the Linux build
+host does not exist here, which is why it was right not to patch it blind.
+
+**Rootless is false.** The machine runs rootful inside its own WSL VM. No
+Windows administrator rights are needed at runtime, but it is not literally
+"rootless podman" as the requirement stated. Worth confirming this satisfies
+whatever the requirement was protecting.
+
+**Workspace bind-mount performance was not measured** on a large repository.
+This repo is small. If builds crawl on a real project, the escape hatch is a
+named volume.
+
+### Three bugs this found, all now fixed
+
+**The litellm image ships no `curl`.** Both the compose healthcheck and the
+launcher's readiness poll used it. A healthcheck referencing a missing binary
+never reports healthy, so the symptom was a 60s timeout in front of a running,
+perfectly functional gateway. Both now use the image's `python3`.
+
+**Windows Defender blocks a `python3 -c` readiness probe as malware.** The
+launcher polled the gateway with
+
+```
+podman compose exec -T litellm python3 -c "import urllib.request; urllib.request.urlopen(...)"
+```
+
+which `podman compose` runs through `docker-compose.exe` as a *Windows*
+process. Defender's command-line heuristic scores inline Python that opens a
+URL as a downloader and kills it — `Trojan:Win32/Commando.A!ml`, logged as
+`CmdLine:_...` rather than a file, once per poll iteration. The visible
+symptom is `fork/exec ... Access is denied`, which looks exactly like an
+argument-quoting bug and was initially misdiagnosed as one.
+
+The launcher no longer execs anything. It reads the compose healthcheck via
+`podman inspect`, which defines readiness in one place and never constructs a
+Windows command line that resembles a stager. The healthcheck itself runs the
+same Python *inside* the container, where Defender does not see it.
+
+Worth remembering as a general rule for this project: **any probe the launcher
+runs is a Windows command line and is subject to AV heuristics**, however
+innocuous it is on Linux.
+
+**Config seeding warned on every launch.** Bind-mounting files into
+`/home/opencode/.config/opencode/` makes podman create the parent root-owned,
+so `seed-config.sh` fails and the entrypoint prints a warning every time --
+noise that reads like a fault. Both stacks now set
+`CRANOPENER_SEED_SRC=/nonexistent`, since config comes from the mounts and
+there is nothing to seed.
+
+### Independent confirmation of the budget finding
+
+`/health/readiness` returns `{"status":"healthy","db":"Not connected"}`.
+That is the code review's finding confirmed from the running system: with no
+database, the spend cap is not enforced.
+
 ## Still pending
 
 - Single-turn parse rate (office)
 - Multi-turn parse rate (office) — the decisive one
 - GenAI context window (office) — turns the table above into an answer
-- Phase 1 end-to-end under podman on Windows (Task 11)
+- Proxied mode against a **real** model. Everything above used placeholder
+  endpoints, so the gateway was never asked to reach a provider. The first
+  real call may still surface auth, TLS, or model-name problems.
+- Workspace performance on a large repository.
