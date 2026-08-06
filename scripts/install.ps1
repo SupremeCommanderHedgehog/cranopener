@@ -79,8 +79,14 @@ Write-Host 'Next steps:' -ForegroundColor Yellow
 Write-Host "  1. copy $Destination\litellm\config.example.yaml to config.yaml,"
 Write-Host '     and replace every PLACEHOLDER with real endpoints and model IDs'
 Write-Host "  2. copy $Destination\.env.example to .env and fill in credentials"
-Write-Host "  3. place the corporate root bundle at $Destination\certs\dod-roots.pem"
-Write-Host '     (an empty file is fine if no extra roots are needed)'
+Write-Host "  3. place a COMPLETE CA bundle at $Destination\certs\dod-roots.pem"
+Write-Host '     The gateway sets SSL_CERT_FILE to it, which REPLACES the default'
+Write-Host '     trust store rather than adding to it -- so this file must contain'
+Write-Host '     the system roots as well as any corporate roots, or every upstream'
+Write-Host '     call fails looking like a provider outage. To build one:'
+Write-Host '       podman run --rm ghcr.io/berriai/litellm:main-stable \'
+Write-Host '         cat /etc/ssl/certs/ca-certificates.crt > dod-roots.pem'
+Write-Host '       cat your-corporate-roots.pem >> dod-roots.pem'
 Write-Host "  4. edit $Destination\opencode\opencode.proxied.json so its model"
 Write-Host '     IDs match the ones in config.yaml'
 Write-Host "  5. add the scripts directory to PATH so `cranopener` resolves"

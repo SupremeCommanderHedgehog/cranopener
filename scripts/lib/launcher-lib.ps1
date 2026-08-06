@@ -15,8 +15,10 @@ function ConvertTo-ComposePath {
 
     $normalized = $Path -replace '\\', '/'
 
-    # A trailing separator would produce a doubled slash in the volume spec.
-    if ($normalized.Length -gt 1) {
+    # A trailing separator would produce a doubled slash in the volume spec --
+    # except at a drive root, where trimming it leaves "C:" and the volume
+    # then reads "C::/workspace".
+    if ($normalized.Length -gt 1 -and $normalized -notmatch '^[A-Za-z]:/$') {
         $normalized = $normalized.TrimEnd('/')
     }
 
@@ -35,10 +37,21 @@ function ConvertTo-ProjectName {
       cranopener in one repo would reuse or tear down another's containers.
       Deriving the name from the working directory instead keeps stacks
       distinct and `podman ps` readable.
+
+      The leaf directory alone is not enough. Two clients each with an "api"
+      directory is an ordinary layout, and colliding on it reintroduces the
+      exact failure this function exists to prevent. A short digest of the
+      full path is appended so the name stays unique while remaining
+      recognisable at a glance.
     #>
     param([Parameter(Mandatory)][string]$Path)
 
     $normalized = ConvertTo-ComposePath $Path
+
+    # Normalise before hashing so C:\a\b, C:/a/b, and C:\a\b\ are one project
+    # rather than three.
+    $canonical = $normalized.TrimEnd('/').ToLower()
+
     $leaf = $normalized -split '/' |
         Where-Object { $_ -ne '' } |
         Select-Object -Last 1
@@ -54,5 +67,14 @@ function ConvertTo-ProjectName {
 
     if (-not $leaf) { $leaf = 'root' }
 
-    return "cranopener-$leaf"
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($canonical)
+        $digest = ($sha.ComputeHash($bytes) |
+            ForEach-Object { $_.ToString('x2') }) -join ''
+    } finally {
+        $sha.Dispose()
+    }
+
+    return "cranopener-$leaf-$($digest.Substring(0, 6))"
 }

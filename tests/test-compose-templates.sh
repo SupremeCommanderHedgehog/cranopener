@@ -82,6 +82,37 @@ print(json.load(open("compose/opencode/opencode.proxied.json"))["permission"]["*
 ')
 assert_eq 'proxied config allows tools without prompting' 'allow' "$perm"
 
+# --- the spend cap must not be claimed where it is not enforced ------------
+# LiteLLM tracks spend in Postgres and this stack provisions none, so the
+# budget keys are inert. They belong under litellm_settings regardless -- the
+# earlier general_settings placement was silently ignored twice over -- and
+# the template must say plainly that they do nothing here. A confident-looking
+# cap that is not enforced is worse than no cap.
+budget_section=$(python3 -c '
+import yaml
+cfg = yaml.safe_load(open("compose/litellm/config.example.yaml"))
+print(cfg.get("litellm_settings", {}).get("max_budget"))
+')
+assert_eq 'budget keys sit under litellm_settings' '50' "$budget_section"
+
+stray=$(python3 -c '
+import yaml
+cfg = yaml.safe_load(open("compose/litellm/config.example.yaml"))
+gs = cfg.get("general_settings") or {}
+print(" ".join(sorted(k for k in gs if "budget" in k)))
+')
+assert_eq 'no budget keys stranded in general_settings' '' "$stray"
+
+assert_ok 'the template warns the cap is unenforced' \
+  grep -q 'NOT enforced' compose/litellm/config.example.yaml
+
+# --- the CA bundle must not be described as optional -----------------------
+# SSL_CERT_FILE replaces the default trust store rather than adding to it, so
+# telling an operator "an empty file is fine" breaks every upstream TLS call
+# and presents as a provider outage.
+assert_ok 'nothing advertises an empty CA bundle as acceptable' \
+  bash -c '! grep -rq "empty file is fine" compose/ scripts/'
+
 # --- credentials belong to the gateway alone -------------------------------
 # The isolation argument for this whole topology is that a command executed by
 # the agent has nothing worth stealing in its own container.
