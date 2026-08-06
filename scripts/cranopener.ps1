@@ -68,7 +68,7 @@ if ($Down) {
 # source fails with an opaque mount error naming a path inside the VM, or --
 # worse -- gets auto-created as an empty root-owned directory that then has to
 # be cleaned up by hand.
-$required = @('certs/dod-roots.pem')
+$required = @('certs/extra-roots.pem')
 if (-not $Direct) { $required += 'litellm/config.yaml' }
 
 foreach ($rel in $required) {

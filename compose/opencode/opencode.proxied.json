@@ -11,12 +11,12 @@
         "apiKey": "unused"
       },
       "models": {
-        "capra/PLACEHOLDER-MODEL": {
-          "name": "Capra (placeholder)",
+        "provider-b/PLACEHOLDER-MODEL": {
+          "name": "Provider B (placeholder)",
           "limit": { "context": 128000, "output": 16384 }
         },
-        "dgx/PLACEHOLDER-MODEL": {
-          "name": "DGX (placeholder)",
+        "provider-c/PLACEHOLDER-MODEL": {
+          "name": "Provider C (placeholder)",
           "limit": { "context": 128000, "output": 16384 }
         }
       }

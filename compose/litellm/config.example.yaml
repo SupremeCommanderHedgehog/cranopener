@@ -2,25 +2,25 @@
 # Real endpoints and model identifiers never belong in this repository.
 
 model_list:
-  - model_name: capra/PLACEHOLDER-MODEL
+  - model_name: provider-b/PLACEHOLDER-MODEL
     litellm_params:
       model: openai/PLACEHOLDER-UPSTREAM-MODEL
-      api_base: https://PLACEHOLDER-CAPRA-HOST/v1
-      api_key: os.environ/CAPRA_API_KEY
+      api_base: https://PLACEHOLDER-PROVIDER-B-HOST/v1
+      api_key: os.environ/PROVIDER_B_API_KEY
 
-  - model_name: dgx/PLACEHOLDER-MODEL
+  - model_name: provider-c/PLACEHOLDER-MODEL
     litellm_params:
       model: openai/PLACEHOLDER-UPSTREAM-MODEL
-      api_base: http://PLACEHOLDER-DGX-HOST:8000/v1
-      api_key: os.environ/DGX_API_KEY
+      api_base: http://PLACEHOLDER-PROVIDER-C-HOST:8000/v1
+      api_key: os.environ/PROVIDER_C_API_KEY
 
   # Added in Phase 2, once the shim exists. A model without native tool
   # calling, reached directly by opencode, fails on its first tool call.
-  # - model_name: genai/PLACEHOLDER-MODEL
+  # - model_name: provider-a/PLACEHOLDER-MODEL
   #   litellm_params:
   #     model: openai/PLACEHOLDER-UPSTREAM-MODEL
-  #     api_base: https://PLACEHOLDER-GENAI-HOST/v1
-  #     api_key: os.environ/GENAI_API_KEY
+  #     api_base: https://PLACEHOLDER-PROVIDER-A-HOST/v1
+  #     api_key: os.environ/PROVIDER_A_API_KEY
 
 litellm_settings:
   # The shim owns prompt-mode tool calling. If both layers inject tool

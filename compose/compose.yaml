@@ -7,7 +7,7 @@ services:
       - litellm
     volumes:
       - ${CRANOPENER_WORKSPACE}:/workspace
-      - ./certs/dod-roots.pem:/etc/ssl/certs/extra-roots.pem:ro
+      - ./certs/extra-roots.pem:/etc/ssl/certs/extra-roots.pem:ro
       - ./opencode/opencode.proxied.json:/home/opencode/.config/opencode/opencode.json:ro
       - ./opencode/AGENTS.md:/home/opencode/.config/opencode/AGENTS.md:ro
     environment:
@@ -36,7 +36,7 @@ services:
     command: ["--config", "/app/config.yaml", "--port", "4000"]
     volumes:
       - ./litellm/config.yaml:/app/config.yaml:ro
-      - ./certs/dod-roots.pem:/etc/ssl/certs/extra-roots.pem:ro
+      - ./certs/extra-roots.pem:/etc/ssl/certs/extra-roots.pem:ro
     healthcheck:
       # `up -d` returns once the container is created, not once it serves.
       #
@@ -57,7 +57,7 @@ services:
       # opencode container and cannot read this environment.
       #
       # Both of these REPLACE the default trust store rather than adding to
-      # it, so dod-roots.pem must be a COMPLETE bundle -- system roots plus
+      # it, so extra-roots.pem must be a COMPLETE bundle -- system roots plus
       # any corporate roots. An empty or roots-only file means the gateway
       # trusts nothing and every upstream call fails looking like an outage.
       SSL_CERT_FILE: /etc/ssl/certs/extra-roots.pem
@@ -65,6 +65,6 @@ services:
       HTTP_PROXY: ${HTTP_PROXY:-}
       HTTPS_PROXY: ${HTTPS_PROXY:-}
       NO_PROXY: ${NO_PROXY:-}
-      CAPRA_API_KEY: ${CAPRA_API_KEY:-}
-      DGX_API_KEY: ${DGX_API_KEY:-}
-      GENAI_API_KEY: ${GENAI_API_KEY:-}
+      PROVIDER_A_API_KEY: ${PROVIDER_A_API_KEY:-}
+      PROVIDER_B_API_KEY: ${PROVIDER_B_API_KEY:-}
+      PROVIDER_C_API_KEY: ${PROVIDER_C_API_KEY:-}

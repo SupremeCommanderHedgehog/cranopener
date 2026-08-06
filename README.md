@@ -68,7 +68,7 @@ cranopener -Direct               # bypass the gateway, use stock providers
 cranopener -Down                 # stop this project's stack
 ```
 
-Two things that bite if you skip them. `certs/dod-roots.pem` must be a
+Two things that bite if you skip them. `certs/extra-roots.pem` must be a
 **complete** CA bundle — the gateway points `SSL_CERT_FILE` at it, which
 replaces the default trust store rather than adding to it, so a roots-only or
 empty file makes every upstream call fail looking like a provider outage. And

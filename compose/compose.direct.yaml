@@ -9,7 +9,7 @@ services:
     image: ghcr.io/supremecommanderhedgehog/cranopener:latest
     volumes:
       - ${CRANOPENER_WORKSPACE}:/workspace
-      - ./certs/dod-roots.pem:/etc/ssl/certs/extra-roots.pem:ro
+      - ./certs/extra-roots.pem:/etc/ssl/certs/extra-roots.pem:ro
       - ./opencode/opencode.direct.json:/home/opencode/.config/opencode/opencode.json:ro
       - ./opencode/AGENTS.md:/home/opencode/.config/opencode/AGENTS.md:ro
     environment:

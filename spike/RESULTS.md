@@ -29,7 +29,7 @@ Per tool, largest first:
 
 ### What it means, by context window
 
-The verdict depends entirely on GenAI's limit, which is still unknown.
+The verdict depends entirely on provider A's limit, which is still unknown.
 
 | Context | Schemas as share | Verdict |
 |---|---|---|
@@ -39,7 +39,7 @@ The verdict depends entirely on GenAI's limit, which is still unknown.
 | 16,000 | 32.5% | Too large — cut tools first |
 | 8,192 | 63.5% | Unusable without major trimming |
 
-**Action for the office visit:** Section D of the worksheet asks for GenAI's
+**Action for the office visit:** Section D of the worksheet asks for provider A's
 context window. That number turns this table into an answer. At 64k or above
 this is a non-issue; at 16k the shim design needs the tool set cut before
 anything else.
@@ -160,7 +160,7 @@ database, the spend cap is not enforced.
 
 - Single-turn parse rate (office)
 - Multi-turn parse rate (office) — the decisive one
-- GenAI context window (office) — turns the table above into an answer
+- provider A context window (office) — turns the table above into an answer
 - Proxied mode against a **real** model. Everything above used placeholder
   endpoints, so the gateway was never asked to reach a provider. The first
   real call may still surface auth, TLS, or model-name problems.

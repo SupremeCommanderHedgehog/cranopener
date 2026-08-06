@@ -63,6 +63,19 @@ done
 leaked=$(grep -rEoh '[a-z0-9-]+\.(mil|gov)\b' compose/ 2>/dev/null | sort -u | tr '\n' ' ')
 assert_eq 'no .mil or .gov hostnames in templates' '' "${leaked% }"
 
+# Backends are PROVIDER_A/B/C here on purpose. Which vendor sits behind each
+# slot is local configuration -- naming them in a public repository discloses
+# an affiliation that cannot be taken back once indexed, and the templates work
+# identically either way.
+#
+# Asserted as an allowlist rather than a list of forbidden vendors, because a
+# denylist would have to spell out the very names it exists to keep out.
+unexpected=$(grep -rIohE '\b[A-Z][A-Z0-9_]*_API_KEY\b' compose/ 2>/dev/null \
+  | sort -u \
+  | grep -vE '^(PROVIDER_[ABC]|ANTHROPIC|OPENAI)_API_KEY$' \
+  | tr '\n' ' ')
+assert_eq 'gateway credentials use generic PROVIDER_* names' '' "${unexpected% }"
+
 # --- the gateway must not double-transform ---------------------------------
 # If LiteLLM also injects tool definitions the prompts double and the output
 # becomes unparseable, and it presents as a model defect.
