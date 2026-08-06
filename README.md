@@ -65,7 +65,16 @@ pwsh -File scripts\install.ps1   # copies templates to ~\.cranopener
 # fill in ~\.cranopener\litellm\config.yaml, .env, and certs\
 cranopener                       # against the current directory
 cranopener -Direct               # bypass the gateway, use stock providers
+cranopener -Down                 # stop this project's stack
 ```
+
+Two things that bite if you skip them. `certs/dod-roots.pem` must be a
+**complete** CA bundle — the gateway points `SSL_CERT_FILE` at it, which
+replaces the default trust store rather than adding to it, so a roots-only or
+empty file makes every upstream call fail looking like a provider outage. And
+the spend cap in `config.yaml` is **not enforced**: LiteLLM tracks spend in
+Postgres and this stack provisions none, so bound unattended runs some other
+way.
 
 The launcher exists because compose resolves relative volume paths against the
 compose file rather than the shell, derives its project name from that same
