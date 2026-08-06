@@ -24,6 +24,8 @@ id_*
 secrets.*
 
 # Local build scratch.
+__pycache__/
+*.pyc
 *.tar.gz
 .versions
 *.log
