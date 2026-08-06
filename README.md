@@ -54,6 +54,29 @@ docker run -it --rm \
   ghcr.io/supremecommanderhedgehog/cranopener:latest
 ```
 
+## Running under podman compose
+
+For unattended runs behind an API gateway: model credentials isolated from the
+container that executes commands, retries and a spend cap at the gateway, and
+no permission prompts to stall a session nobody is watching.
+
+```powershell
+pwsh -File scripts\install.ps1   # copies templates to ~\.cranopener
+# fill in ~\.cranopener\litellm\config.yaml, .env, and certs\
+cranopener                       # against the current directory
+cranopener -Direct               # bypass the gateway, use stock providers
+```
+
+The launcher exists because compose resolves relative volume paths against the
+compose file rather than the shell, derives its project name from that same
+directory, and gives `up` no terminal for the TUI. It sets the workspace path
+and a per-directory project name, then runs opencode in the foreground.
+
+Templates in `compose/` carry placeholder endpoints. Real hostnames, model
+identifiers, and credentials belong only in `~\.cranopener`, which is never
+committed. `install.ps1` never overwrites what is already there, and reports
+which files have drifted from the shipped templates.
+
 ## How it stays current
 
 A scheduled build runs on the 1st of each month. It resolves the latest
