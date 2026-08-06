@@ -1,0 +1,42 @@
+# Proxied stack: opencode behind the LiteLLM gateway.
+# Phase 2 inserts the tool-call shim between them.
+services:
+  opencode:
+    image: ghcr.io/supremecommanderhedgehog/cranopener:latest
+    depends_on:
+      - litellm
+    volumes:
+      - ${CRANOPENER_WORKSPACE}:/workspace
+      - ./certs/dod-roots.pem:/etc/ssl/certs/extra-roots.pem:ro
+      - ./opencode/opencode.proxied.json:/home/opencode/.config/opencode/opencode.json:ro
+      - ./opencode/AGENTS.md:/home/opencode/.config/opencode/AGENTS.md:ro
+    environment:
+      # opencode still needs the corporate roots for git, npm, and gh. The hop
+      # to litellm is plain HTTP on the internal network, so no certificate is
+      # involved there -- hence litellm in NO_PROXY, or the corporate proxy
+      # would be asked to route a container-internal name it cannot resolve.
+      NODE_EXTRA_CA_CERTS: /etc/ssl/certs/extra-roots.pem
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      NO_PROXY: ${NO_PROXY:-},litellm
+    stdin_open: true
+    tty: true
+
+  litellm:
+    image: ghcr.io/berriai/litellm:main-stable
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    volumes:
+      - ./litellm/config.yaml:/app/config.yaml:ro
+      - ./certs/dod-roots.pem:/etc/ssl/certs/extra-roots.pem:ro
+    environment:
+      # The only container that makes outbound TLS calls, and the only one
+      # holding real credentials. A command executed by the agent runs in the
+      # opencode container and cannot read this environment.
+      SSL_CERT_FILE: /etc/ssl/certs/extra-roots.pem
+      REQUESTS_CA_BUNDLE: /etc/ssl/certs/extra-roots.pem
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      NO_PROXY: ${NO_PROXY:-}
+      CAPRA_API_KEY: ${CAPRA_API_KEY:-}
+      DGX_API_KEY: ${DGX_API_KEY:-}
+      GENAI_API_KEY: ${GENAI_API_KEY:-}
