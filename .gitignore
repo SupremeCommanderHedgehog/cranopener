@@ -4,6 +4,11 @@
 # Design docs and plans — they reference internal build hosts and key paths.
 docs/
 
+# Spike results — measurements and environment findings from specific hosts.
+# Kept local for the same reason as docs/: sanitizing them by hand before every
+# commit is a step that only has to be forgotten once.
+spike/RESULTS.md
+
 # Local agent/tool configuration.
 .claude/
 .opencode/

@@ -52,5 +52,6 @@ tokenizer output. That is deliberate: the question is "is this 5% or 40% of
 the window", which an estimate settles, and it keeps the tooling dependency
 free on machines where installing packages is not straightforward.
 
-Results belong in `RESULTS.md`, which is gitignored along with the rest of
-`docs/`-style local notes if it contains anything environment-specific.
+Results belong in `RESULTS.md`, which is gitignored. Measurements name specific
+hosts, endpoints, and model limits, and this repository is public — keeping the
+file local means sanitizing it is not a step anyone has to remember.
