@@ -29,6 +29,11 @@ ssh -i "$KEY" "$HOST" "rm -rf '$DIR' && mkdir -p '$DIR/spike' '$DIR/tests/fixtur
 tar -C "$REPO_ROOT" -czf - spike \
   | ssh -i "$KEY" "$HOST" "tar -xzf - -C '$DIR'"
 
+# The context is synced from a Windows host, where tar records owner-only
+# modes; the files land as 700 and read as executables. Normalise them, the
+# same problem the Dockerfile already works around for the build context.
+ssh -i "$KEY" "$HOST" "chmod -R u+rwX,go-rwx '$DIR' && find '$DIR' -type f -exec chmod 600 {} +"
+
 echo "==> confirming the image exists on the host"
 if ! ssh -i "$KEY" "$HOST" "podman image exists '$TAG'"; then
   echo "image '$TAG' not found on $HOST." >&2

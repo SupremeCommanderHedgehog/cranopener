@@ -1,5 +1,10 @@
-#!/usr/bin/env python3
 """Record the exact /v1/chat/completions body opencode sends.
+
+Deliberately has no `#!` line. Build hosts running fapolicyd treat a
+shebang'd Python file as an untrusted executable and refuse to even read it,
+returning EPERM. Nothing here is ever run directly -- the driver always
+invokes `python3 <file>` -- so the shebang bought nothing and cost the whole
+run. Do not add one back.
 
 opencode re-sends its tool schemas on every turn, so their size sets a floor
 on context consumption for the whole session. Guessing at that floor is how

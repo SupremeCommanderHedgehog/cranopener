@@ -1,5 +1,8 @@
-#!/usr/bin/env python3
 """Report the token cost of the tool schemas in a captured request.
+
+Deliberately has no `#!` line -- see the note in capture-request.py. Build
+hosts running fapolicyd refuse to read shebang'd Python files, and this is
+always invoked as `python3 <file>`. Do not add one back.
 
 Uses the standard ~4-characters-per-token approximation rather than a real
 tokenizer. That is deliberate: the question is "is this 5% or 40% of the
@@ -34,9 +37,15 @@ def main(argv):
     tools = request.get("tools", [])
     if not tools:
         print("no `tools` array in the captured request", file=sys.stderr)
+        print(f"top-level keys present: {sorted(request)}", file=sys.stderr)
+        msgs = request.get("messages", [])
+        print(f"messages: {len(msgs)}", file=sys.stderr)
+        for m in msgs[:3]:
+            body = str(m.get("content"))[:120].replace("\n", " ")
+            print(f"  {m.get('role'):10s} {body}", file=sys.stderr)
         print(
-            "opencode may not have reached the model, or the capture landed on "
-            "a follow-up request. Check the capture log.",
+            "\nA `permission` block set to deny strips tools from the request. "
+            "So does disabling them via `tools` in the config.",
             file=sys.stderr,
         )
         return 1

@@ -42,14 +42,23 @@ cat > "$WORK/config/opencode.json" <<EOF
       "options": { "baseURL": "http://127.0.0.1:${PORT}/v1", "apiKey": "unused" },
       "models": { "probe": { "name": "probe" } }
     }
-  },
-  "permission": { "*": "deny" }
+  }
 }
 EOF
 
 # Something has to exist in the workspace or opencode may not exercise its
 # file tools when assembling the request.
 echo "# probe" > "$WORK/workspace/README.md"
+
+# Note: no "permission" block above. Denying permissions also strips the tool
+# definitions out of the request, which are the entire point of this run. The
+# capture server replies with plain text and finish_reason "stop", so the
+# session has nothing to act on regardless.
+
+# mktemp -d creates 0700. Under rootless podman the container sees these mounts
+# as root-owned, so anything not world-readable is unreachable to the image's
+# opencode user and the run fails with a bare "Permission denied".
+chmod -R a+rX "$WORK"
 
 echo "==> starting capture server on :${PORT}"
 python3 "$HERE/capture-request.py" "$WORK/captured.json" "$PORT" &
@@ -67,6 +76,13 @@ echo "==> running opencode against the capture server"
 # --network=host so the container reaches the capture server on the loopback
 # interface. Permissions are denied in the config above, so the session cannot
 # act on the workspace; it only has to get as far as composing one request.
+#
+# Deliberately no --userns. Under rootless podman the bind mounts appear
+# root-owned inside the container, but the probe only needs to *read* them,
+# and world-readable modes cover that -- see the chmod above. --userns=keep-id
+# looks like the obvious fix and is not: it hangs outright on podman 5.8.2,
+# and the uid= form is rejected, so both failure modes cost a timeout rather
+# than an error message.
 timeout 180 "$ENGINE" run --rm --network=host \
   -v "$WORK/config:/home/opencode/.config/opencode:z" \
   -v "$WORK/workspace:/workspace:z" \
