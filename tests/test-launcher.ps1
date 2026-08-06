@@ -133,6 +133,18 @@ $threw = $false
 try { ConvertTo-VmPath '\\server\share' | Out-Null } catch { $threw = $true }
 Assert-Eq 'a UNC path is rejected rather than mistranslated' $true $threw
 
+# A relative path has no drive to translate under /mnt.
+$threw = $false
+try { ConvertTo-VmPath 'Users\me\x' | Out-Null } catch { $threw = $true }
+Assert-Eq 'a relative path is rejected rather than mistranslated' $true $threw
+
+# C:foo is drive-relative (relative to the current directory on drive C), not
+# absolute -- it is not the same path as C:\foo. Translating it as though it
+# were absolute would silently point at the wrong file.
+$threw = $false
+try { ConvertTo-VmPath 'C:foo' | Out-Null } catch { $threw = $true }
+Assert-Eq 'a drive-relative path is rejected rather than mistranslated' $true $threw
+
 Write-Host ''
 Write-Host "test-launcher.ps1: $script:Run run, $script:Failed failed"
 if ($script:Failed -gt 0) { exit 1 }

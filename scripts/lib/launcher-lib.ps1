@@ -10,9 +10,17 @@ function ConvertTo-ComposePath {
       Compose splits volume specifications on ':'. A Windows path like
       C:\Users\me\proj therefore parses as host "C" with container path
       "\Users\me\proj". Forward slashes remove the ambiguity.
+
+      This is for `podman run -v` / compose volume specs only. For a
+      Kubernetes hostPath value (`podman kube play`), use ConvertTo-VmPath
+      instead -- this function still returns a Windows-style path, and a
+      hostPath given a Windows-style path resolves inside the podman machine
+      and fails to find the file.
     #>
     param([Parameter(Mandatory)][string]$Path)
 
+    # NOTE: for a Kubernetes hostPath value, use ConvertTo-VmPath below
+    # instead -- this returns a Windows-style path, which hostPath cannot use.
     $normalized = $Path -replace '\\', '/'
 
     # A trailing separator would produce a doubled slash in the volume spec --
@@ -91,14 +99,16 @@ function ConvertTo-VmPath {
       under /mnt, so C:\Users\me becomes /mnt/c/Users/me.
 
       The two forms are interchangeable everywhere else in this project, which
-      is precisely why this is easy to get wrong.
+      is precisely why this is easy to get wrong. Use this for a Kubernetes
+      hostPath value only -- for a `podman run -v` / compose volume spec, use
+      ConvertTo-ComposePath instead, which returns a Windows-style path.
     #>
     param([Parameter(Mandatory)][string]$Path)
 
     $normalized = $Path -replace '\\', '/'
 
     if ($normalized -notmatch '^([A-Za-z]):(/.*)?$') {
-        throw "ConvertTo-VmPath expects a drive-letter path, got '$Path'. A UNC path has no /mnt equivalent inside the podman machine."
+        throw "ConvertTo-VmPath requires an absolute drive-letter path like 'C:\Users\me', got '$Path'."
     }
 
     $drive = $Matches[1].ToLower()
