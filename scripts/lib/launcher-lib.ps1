@@ -78,3 +78,35 @@ function ConvertTo-ProjectName {
 
     return "cranopener-$leaf-$($digest.Substring(0, 6))"
 }
+
+function ConvertTo-VmPath {
+    <#
+    .SYNOPSIS
+      Translate a Windows path to the path the podman machine sees.
+
+    .DESCRIPTION
+      `podman run -v` accepts a Windows path and translates it. `podman kube
+      play` does not: hostPath resolves inside the machine, so C:/x is looked
+      up as /C:/x and reported missing. The machine mounts Windows drives
+      under /mnt, so C:\Users\me becomes /mnt/c/Users/me.
+
+      The two forms are interchangeable everywhere else in this project, which
+      is precisely why this is easy to get wrong.
+    #>
+    param([Parameter(Mandatory)][string]$Path)
+
+    $normalized = $Path -replace '\\', '/'
+
+    if ($normalized -notmatch '^([A-Za-z]):(/.*)?$') {
+        throw "ConvertTo-VmPath expects a drive-letter path, got '$Path'. A UNC path has no /mnt equivalent inside the podman machine."
+    }
+
+    $drive = $Matches[1].ToLower()
+    $rest = $Matches[2]
+
+    # Trailing separators would produce a doubled slash when joined. A drive
+    # root reduces to the mount point itself.
+    if ($rest) { $rest = $rest.TrimEnd('/') }
+
+    return "/mnt/$drive$rest"
+}

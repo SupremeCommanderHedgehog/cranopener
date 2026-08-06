@@ -101,6 +101,38 @@ Assert-Eq 'the generated name is compose-legal' `
     $true `
     ((ConvertTo-ProjectName 'C:\Users\me\My.Proj') -cmatch '^[a-z0-9_-]+$')
 
+# --- ConvertTo-VmPath ------------------------------------------------------
+# hostPath resolves inside the podman machine, not on Windows: a C:/ path is
+# looked up as /C:/ and reported missing. The machine mounts Windows drives
+# under /mnt. `podman run -v` accepts the Windows form, which is exactly why
+# this is easy to get wrong -- the same string works in one place and not the
+# other.
+
+Assert-Eq 'a drive letter becomes a /mnt mount' `
+    '/mnt/c/Users/me/.cranopener' (ConvertTo-VmPath 'C:\Users\me\.cranopener')
+
+Assert-Eq 'the drive letter is lowercased' `
+    '/mnt/d/data' (ConvertTo-VmPath 'D:\data')
+
+Assert-Eq 'forward slashes are accepted' `
+    '/mnt/c/Users/me' (ConvertTo-VmPath 'C:/Users/me')
+
+Assert-Eq 'spaces are preserved' `
+    '/mnt/c/Users/my proj' (ConvertTo-VmPath 'C:\Users\my proj')
+
+Assert-Eq 'a trailing separator is stripped' `
+    '/mnt/c/Users/me' (ConvertTo-VmPath 'C:\Users\me\')
+
+Assert-Eq 'a drive root yields the mount point' `
+    '/mnt/c' (ConvertTo-VmPath 'C:\')
+
+# A UNC path has no /mnt equivalent. Translating it anyway would produce
+# something plausible and wrong, and the failure would surface as a missing
+# file inside the VM with no hint of where the path came from.
+$threw = $false
+try { ConvertTo-VmPath '\\server\share' | Out-Null } catch { $threw = $true }
+Assert-Eq 'a UNC path is rejected rather than mistranslated' $true $threw
+
 Write-Host ''
 Write-Host "test-launcher.ps1: $script:Run run, $script:Failed failed"
 if ($script:Failed -gt 0) { exit 1 }
