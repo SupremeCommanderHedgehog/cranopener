@@ -56,7 +56,7 @@ definitions into the system prompt as text, which will not be smaller. So
 text-flattened history that cannot be trimmed the way structured tool
 messages can.
 
-## Environment findings (cougar, the Linux build host)
+## Environment findings (the Linux build host)
 
 Discovered while getting the measurement to run. Both cost real time and are
 worth knowing before the Windows work.
