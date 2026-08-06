@@ -14,13 +14,17 @@ on:
     paths:
       - Dockerfile
       - config/**
+      - compose/**
       - scripts/**
+      - tests/**
       - .github/workflows/**
   pull_request:
     paths:
       - Dockerfile
       - config/**
+      - compose/**
       - scripts/**
+      - tests/**
       - .github/workflows/**
 
 concurrency:
@@ -39,12 +43,21 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # The resolver tests skip themselves when jq is absent, so CI must prove
-      # jq exists — otherwise a silent skip would look identical to a pass.
+      # Several test files skip themselves when a prerequisite is absent, so CI
+      # must prove each one exists — otherwise a silent skip would look
+      # identical to a pass.
       - name: Assert jq is available
         run: jq --version
+      - name: Assert PyYAML is available
+        run: python3 -c 'import yaml'
       - name: Run shell unit tests
         run: bash tests/run-all.sh
+      # run-all.sh globs tests/test-*.sh, so the PowerShell tests are invisible
+      # to it. Without this step a regression in launcher-lib.ps1 reaches main
+      # green. pwsh is preinstalled on ubuntu-latest.
+      - name: Run PowerShell unit tests
+        shell: pwsh
+        run: pwsh -File tests/test-launcher.ps1
 
   build:
     needs: unit-tests

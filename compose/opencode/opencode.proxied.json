@@ -1,0 +1,33 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "theme": "system",
+  "autoupdate": false,
+  "provider": {
+    "cranopener": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "cranopener",
+      "options": {
+        "baseURL": "http://litellm:4000/v1",
+        "apiKey": "unused"
+      },
+      "models": {
+        "provider-b/PLACEHOLDER-MODEL": {
+          "name": "Provider B (placeholder)",
+          "limit": { "context": 128000, "output": 16384 }
+        },
+        "provider-c/PLACEHOLDER-MODEL": {
+          "name": "Provider C (placeholder)",
+          "limit": { "context": 128000, "output": 16384 }
+        }
+      }
+    }
+  },
+  "permission": {
+    "*": "allow",
+    "bash": {
+      "*": "allow",
+      "rm -rf /": "deny",
+      "rm -rf /*": "deny"
+    }
+  }
+}

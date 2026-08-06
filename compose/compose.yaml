@@ -1,0 +1,70 @@
+# Proxied stack: opencode behind the LiteLLM gateway.
+# Phase 2 inserts the tool-call shim between them.
+services:
+  opencode:
+    image: ghcr.io/supremecommanderhedgehog/cranopener:latest
+    depends_on:
+      - litellm
+    volumes:
+      - ${CRANOPENER_WORKSPACE}:/workspace
+      - ./certs/extra-roots.pem:/etc/ssl/certs/extra-roots.pem:ro
+      - ./opencode/opencode.proxied.json:/home/opencode/.config/opencode/opencode.json:ro
+      - ./opencode/AGENTS.md:/home/opencode/.config/opencode/AGENTS.md:ro
+    environment:
+      # opencode still needs the corporate roots for git, npm, and gh. The hop
+      # to litellm is plain HTTP on the internal network, so no certificate is
+      # involved there -- hence litellm in NO_PROXY, or the corporate proxy
+      # would be asked to route a container-internal name it cannot resolve.
+      # Config comes from the mounts above, so there is nothing to seed. Left
+      # unset, the entrypoint tries to populate a directory podman created
+      # root-owned for the bind mounts and warns on every single launch --
+      # noise that reads like a fault and sends people chasing it. Pointing the
+      # seed source at a path that does not exist makes it exit cleanly.
+      CRANOPENER_SEED_SRC: /nonexistent
+      NODE_EXTRA_CA_CERTS: /etc/ssl/certs/extra-roots.pem
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      # The :+ form so an unset NO_PROXY yields "litellm" rather than
+      # ",litellm" -- a leading empty element that some clients handle
+      # inconsistently.
+      NO_PROXY: ${NO_PROXY:+${NO_PROXY},}litellm
+    stdin_open: true
+    tty: true
+
+  litellm:
+    image: ghcr.io/berriai/litellm:main-stable
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    volumes:
+      - ./litellm/config.yaml:/app/config.yaml:ro
+      - ./certs/extra-roots.pem:/etc/ssl/certs/extra-roots.pem:ro
+    healthcheck:
+      # `up -d` returns once the container is created, not once it serves.
+      #
+      # Uses python rather than curl: the litellm image ships no curl, and a
+      # healthcheck referencing a missing binary never reports healthy, so the
+      # symptom is a timeout with a running, perfectly functional gateway.
+      # /health/liveliness is the right probe because it answers without
+      # touching upstream endpoints -- /health tries to reach every configured
+      # provider and is red until real credentials exist.
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness', timeout=3)"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    environment:
+      # The only container that makes outbound TLS calls, and the only one
+      # holding real credentials. A command executed by the agent runs in the
+      # opencode container and cannot read this environment.
+      #
+      # Both of these REPLACE the default trust store rather than adding to
+      # it, so extra-roots.pem must be a COMPLETE bundle -- system roots plus
+      # any corporate roots. An empty or roots-only file means the gateway
+      # trusts nothing and every upstream call fails looking like an outage.
+      SSL_CERT_FILE: /etc/ssl/certs/extra-roots.pem
+      REQUESTS_CA_BUNDLE: /etc/ssl/certs/extra-roots.pem
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      NO_PROXY: ${NO_PROXY:-}
+      PROVIDER_A_API_KEY: ${PROVIDER_A_API_KEY:-}
+      PROVIDER_B_API_KEY: ${PROVIDER_B_API_KEY:-}
+      PROVIDER_C_API_KEY: ${PROVIDER_C_API_KEY:-}

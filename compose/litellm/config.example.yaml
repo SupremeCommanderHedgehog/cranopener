@@ -1,0 +1,46 @@
+# Copy to ~/.cranopener/litellm/config.yaml and replace every PLACEHOLDER.
+# Real endpoints and model identifiers never belong in this repository.
+
+model_list:
+  - model_name: provider-b/PLACEHOLDER-MODEL
+    litellm_params:
+      model: openai/PLACEHOLDER-UPSTREAM-MODEL
+      api_base: https://PLACEHOLDER-PROVIDER-B-HOST/v1
+      api_key: os.environ/PROVIDER_B_API_KEY
+
+  - model_name: provider-c/PLACEHOLDER-MODEL
+    litellm_params:
+      model: openai/PLACEHOLDER-UPSTREAM-MODEL
+      api_base: http://PLACEHOLDER-PROVIDER-C-HOST:8000/v1
+      api_key: os.environ/PROVIDER_C_API_KEY
+
+  # Added in Phase 2, once the shim exists. A model without native tool
+  # calling, reached directly by opencode, fails on its first tool call.
+  # - model_name: provider-a/PLACEHOLDER-MODEL
+  #   litellm_params:
+  #     model: openai/PLACEHOLDER-UPSTREAM-MODEL
+  #     api_base: https://PLACEHOLDER-PROVIDER-A-HOST/v1
+  #     api_key: os.environ/PROVIDER_A_API_KEY
+
+litellm_settings:
+  # The shim owns prompt-mode tool calling. If both layers inject tool
+  # definitions the prompts double and the output becomes unparseable, and it
+  # presents as a model defect rather than a configuration one.
+  add_function_to_prompt: false
+  num_retries: 3
+  request_timeout: 300
+
+  # WARNING: these two keys are NOT enforced by this stack.
+  #
+  # LiteLLM tracks spend in a Postgres database, and compose.yaml provisions
+  # none. Without DATABASE_URL set and a database reachable, the values below
+  # are inert -- an agent looping unattended against a metered endpoint will
+  # run until it finishes or you stop it.
+  #
+  # They are left here, correctly placed under litellm_settings rather than
+  # general_settings, so that adding a database is the only step needed to
+  # make them real. Until then, treat unattended runs as uncapped and bound
+  # them some other way: a token limit on the key at the provider, or
+  # supervision.
+  max_budget: 50
+  budget_duration: 30d
