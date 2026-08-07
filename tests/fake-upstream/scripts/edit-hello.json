@@ -1,0 +1,9 @@
+{
+  "responses": [
+    "I will look at the workspace first.\n\nLet me list what is here.",
+    "Now I will create the file that was asked for.",
+    "The file is created. Let me confirm it is on disk.",
+    "Confirmed. hello.txt exists and contains the expected text.",
+    "The task is complete."
+  ]
+}
