@@ -32,6 +32,16 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# Not redundant, despite appearances. This script drives control flow from
+# $LASTEXITCODE -- `podman pod exists` returns 1 for "no" rather than failing,
+# `podman inspect` returns non-zero for a container that has not been created
+# yet, and a non-zero opencode exit is a result to forward, not an error. When
+# a caller's profile sets this to $true, `Stop` above turns all three into
+# terminating errors: the gateway path dies on a fresh machine, the readiness
+# poll dies in its first pass, and a failing agent run raises instead of
+# returning its code. Pin it so behaviour does not depend on the caller.
+$PSNativeCommandUseErrorActionPreference = $false
+
 $Install = if ($env:CRANOPENER_HOME) { $env:CRANOPENER_HOME }
            else { Join-Path $env:USERPROFILE '.cranopener' }
 
@@ -123,7 +133,14 @@ if (-not $Direct) {
         $block = New-GatewayEnvBlock -Names $names -Values $values -Indent 6
 
         $template = Get-Content $GatewayYaml -Raw
-        $marker = [regex]'(?m)^[ \t]*env:[ \t]*\[\][ \t]*#[ \t]*__CRANOPENER_GATEWAY_ENV__[ \t]*$'
+        # \r? before the anchor: .NET's multiline '$' asserts before '\n'
+        # only, so without it a CRLF copy of the template does not match and
+        # the launcher reports a missing marker that is plainly visible in the
+        # file. The installed copy is written by install.ps1, and PowerShell's
+        # Set-Content emits CRLF by default. install.ps1 preserves LF; this is
+        # the second line of defence, because a hand-edit in Notepad is not
+        # something install.ps1 can prevent.
+        $marker = [regex]'(?m)^[ \t]*env:[ \t]*\[\][ \t]*#[ \t]*__CRANOPENER_GATEWAY_ENV__[ \t]*\r?$'
         if (-not $marker.IsMatch($template)) {
             throw "$GatewayYaml has no __CRANOPENER_GATEWAY_ENV__ marker. Without it the gateway starts with no credentials and fails at the provider looking like an auth problem."
         }
@@ -166,8 +183,20 @@ if (-not $Direct) {
 
 $config = if ($Direct) { 'opencode.direct.json' } else { 'opencode.proxied.json' }
 
+# A TTY only when there is a terminal on both ends. The opencode TUI needs one
+# to draw, so an interactive session must keep it -- but `-t` allocates a pty
+# unconditionally, and against a redirected stream that pty does two damaging
+# things. Piped stdin never reaches EOF, so the container hangs forever: this
+# project exists substantially for unattended runs, and AGENTS.md opens by
+# saying anything that waits for input waits forever. Redirected stdout gets
+# the pty's CR injection, so captured output arrives as CRLF and anything
+# parsing it sees trailing '\r' on every line. Neither is hypothetical; both
+# were reproduced against podman.
+$tty = if ([Console]::IsInputRedirected -or [Console]::IsOutputRedirected) { '-i' }
+       else { '-it' }
+
 $runArgs = @(
-    'run', '-it', '--rm',
+    'run', $tty, '--rm',
     # kube play sets no labels of its own, so this is what keeps `podman ps`
     # readable across projects -- the job COMPOSE_PROJECT_NAME used to do.
     '--label', "cranopener.project=$project",
