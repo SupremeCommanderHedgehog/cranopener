@@ -129,9 +129,14 @@ function New-GatewayEnvBlock {
       Render a Kubernetes env block from a set of variable names and values.
 
     .DESCRIPTION
-      Credentials must not be written to disk, and `podman kube play` has no
-      --env flag, so the launcher builds this block in memory and pipes the
-      manifest to `podman kube play -`. stdin is also preferable to argv,
+      Credentials must not be written to a file the operator manages, and
+      `podman kube play` has no --env flag, so the launcher builds this block
+      in memory and pipes the manifest to `podman kube play -`. Note what that
+      does and does not buy: podman records the container's environment in its
+      own state inside the machine, where `podman inspect` prints it in
+      plaintext, so this is not secrecy. What it buys over `kind: Secret` is
+      lifetime -- these values die with the pod, a secret persists until
+      someone runs `podman secret rm`. stdin is also preferable to argv,
       which is visible in process listings.
 
       Every value is single-quoted. YAML single-quoted scalars honour no
@@ -304,8 +309,14 @@ function Get-Sha256 {
       Bytes rather than a path because the installer compares what it would
       write against what is on disk, and one side of that has never been a
       file.
+
+      AllowEmptyCollection because PowerShell treats an empty array as a
+      missing mandatory argument. Without it a zero-byte template makes the
+      installer die on "cannot bind argument ... because it is an empty array",
+      naming a parameter the operator never supplied. An empty file is a
+      degenerate input, not an unrepresentable one -- it hashes fine.
     #>
-    param([Parameter(Mandatory)][byte[]]$Bytes)
+    param([Parameter(Mandatory)][AllowEmptyCollection()][byte[]]$Bytes)
 
     $sha = [System.Security.Cryptography.SHA256]::Create()
     try { return [BitConverter]::ToString($sha.ComputeHash($Bytes)).Replace('-', '') }
