@@ -9,6 +9,10 @@ docs/
 # commit is a step that only has to be forgotten once.
 spike/RESULTS.md
 
+# Office probe output — raw prompts, raw model responses, and the endpoint's
+# own identifying detail. Captured on every run by design.
+spike/office/out/
+
 # Local agent/tool configuration.
 .claude/
 .opencode/
