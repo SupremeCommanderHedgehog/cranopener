@@ -570,6 +570,75 @@ $configuredModel    = ($proxied.provider.$configuredProvider.models.PSObject.Pro
 Assert-Eq 'the default provider id is the one the proxied config declares' `
     "$configuredProvider/$configuredModel" (Get-OpencodeModelId $configuredModel)
 
+# --- Get-OpenHandsEnvNames -------------------------------------------------
+# The cross-component coupling that had already gone wrong: the launcher
+# forwarded three variables under a comment claiming to list everything
+# run-openhands.sh reads, and CRANOPENER_LLM_BASE_URL -- a real operator knob,
+# used by tests/integration/openhands-wire.sh -- was not one of them. An
+# operator who set it had it dropped and got the pod default with no
+# diagnostic. Nothing but this test ties the two files together.
+
+$oh = Get-OpenHandsEnvNames
+
+# Read out of the adapter rather than retyped here, so a knob added there
+# cannot silently go unclassified. The pattern is bash's `${NAME:-default}`,
+# which is the only form the adapter uses to read its environment; a new name
+# in any other form would be missed, and a new *internal* variable given a
+# default would land here and have to be classified deliberately. Both are the
+# intended failure -- this file is the place that decision gets made.
+$adapterSrc = Get-Content "$PSScriptRoot/../scripts/run-openhands.sh" -Raw
+$adapterReads = [regex]::Matches($adapterSrc, '\$\{([A-Z][A-Z0-9_]*):-') |
+                ForEach-Object { $_.Groups[1].Value } |
+                Sort-Object -Unique
+
+Assert-Eq 'the adapter reads some environment variables to classify' `
+    $true ($adapterReads.Count -gt 0)
+
+$declared = @($oh.Forward) + @($oh.InImage)
+
+Assert-Eq 'no variable is both forwarded and in-image' `
+    0 (@($oh.Forward | Where-Object { $oh.InImage -contains $_ }).Count)
+
+$unclassified = @($adapterReads | Where-Object { $declared -notcontains $_ })
+Assert-Eq "every variable run-openhands.sh reads is classified (unclassified: $($unclassified -join ', '))" `
+    0 $unclassified.Count
+
+# The other direction. A name left in either list after the adapter stopped
+# reading it is a forwarded variable that does nothing, which is exactly the
+# kind of thing that survives because it looks deliberate.
+$phantom = @($declared | Where-Object { $adapterReads -notcontains $_ })
+Assert-Eq "nothing is declared that the adapter does not read (phantom: $($phantom -join ', '))" `
+    0 $phantom.Count
+
+# The specific regression, named rather than left to the set arithmetic above.
+Assert-Eq 'CRANOPENER_LLM_BASE_URL is forwarded' `
+    $true ($oh.Forward -contains 'CRANOPENER_LLM_BASE_URL')
+
+Assert-Eq 'the credential is forwarded' `
+    $true ($oh.Forward -contains 'CRANOPENER_LLM_API_KEY')
+
+# Both bounds on an unattended run. Dropping either leaves the SDK's own 500
+# completions as the only limit, against a gateway whose spend cap is inert.
+Assert-Eq 'the iteration cap is forwarded' `
+    $true ($oh.Forward -contains 'CRANOPENER_MAX_ITERATIONS')
+
+Assert-Eq 'the wall-clock bound is forwarded' `
+    $true ($oh.Forward -contains 'CRANOPENER_TIMEOUT_SECONDS')
+
+# Container-side paths. A Windows value for either names nothing the container
+# can open, so forwarding one could only break a run that worked.
+Assert-Eq 'the workspace path is not forwarded' `
+    $true ($oh.InImage -contains 'OPENHANDS_WORK_DIR')
+
+Assert-Eq 'the SDK interpreter path is not forwarded' `
+    $true ($oh.InImage -contains 'CRANOPENER_OPENHANDS_PYTHON')
+
+# The launcher must forward the list rather than a copy of it. Retyped names in
+# cranopener.ps1 would drift from this function the first time one changed.
+$launcherText = Get-Content "$PSScriptRoot/../scripts/cranopener.ps1" -Raw
+Assert-Eq 'the launcher forwards the declared list rather than a literal one' `
+    $true ($launcherText -match '\(Get-OpenHandsEnvNames\)\.Forward')
+
 Write-Host ''
 Write-Host "test-launcher.ps1: $script:Run run, $script:Failed failed"
 if ($script:Failed -gt 0) { exit 1 }

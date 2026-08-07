@@ -365,6 +365,78 @@ function Get-HarnessForModel {
     return 'opencode'
 }
 
+function Get-OpenHandsEnvNames {
+    <#
+    .SYNOPSIS
+      Which environment variables the launcher forwards into an OpenHands
+      session, and which it reads but deliberately leaves behind.
+
+    .DESCRIPTION
+      run-openhands.sh reads nine variables from its environment. Only some of
+      them are anything an operator on this side of the container has business
+      setting, and which is which is not obvious from either file -- which is
+      how CRANOPENER_LLM_BASE_URL came to be used by
+      tests/integration/openhands-wire.sh, covered by a launcher comment
+      claiming to forward "everything run-openhands.sh reads from the
+      environment, and nothing else", and silently dropped. An operator who set
+      it got the pod default with no diagnostic at all.
+
+      Both halves are returned, not just the forwarded one, so
+      test-launcher.ps1 can hold the pair against the variables the adapter
+      actually reads and fail when they stop agreeing. A comment asserting its
+      own completeness is worse than no comment, because it stops the next
+      reader checking; this is the same assertion in a form that cannot quietly
+      stop being true.
+
+      Forward:
+        CRANOPENER_LLM_API_KEY      the credential.
+        CRANOPENER_LLM_BASE_URL     which endpoint. Its default is the gateway
+                                    on the pod's shared network namespace --
+                                    right for the ordinary case and wrong for
+                                    anyone aiming a session somewhere else, and
+                                    being wrong silently is the expensive part.
+        CRANOPENER_MAX_ITERATIONS   the only real bound on an unattended run.
+        CRANOPENER_TIMEOUT_SECONDS  the backstop the iteration cap cannot be.
+
+      InImage -- read by the adapter, deliberately not forwarded:
+        CRANOPENER_OPENHANDS_GENERATOR, CRANOPENER_OPENHANDS_PYTHON
+                                    paths to files that exist only inside the
+                                    image. A value set on Windows names nothing
+                                    the container can open, so forwarding one
+                                    could only break a run that worked.
+        CRANOPENER_OPENHANDS_KEEP_SETTINGS
+                                    reuses an agent_settings.json already on
+                                    disk instead of generating one. Nothing is
+                                    mounted at the persistence directory, so
+                                    the only file it could reuse is one this
+                                    launcher did not put there.
+        OPENHANDS_PERSISTENCE_DIR, OPENHANDS_WORK_DIR
+                                    container-side paths the launcher has
+                                    already decided by mounting the working
+                                    directory at /workspace, which is
+                                    OPENHANDS_WORK_DIR's default. Moving either
+                                    aims the harness at somewhere nothing is
+                                    mounted.
+
+      Nothing is forwarded by value: `podman --env NAME` takes it from the
+      launcher's own process. Uniform across all four rather than only the
+      credential, because the day one of these stops being a plain number is
+      the day a value-bearing form would have to be noticed and would not be.
+    #>
+
+    return @{
+        Forward = @('CRANOPENER_LLM_API_KEY',
+                    'CRANOPENER_LLM_BASE_URL',
+                    'CRANOPENER_MAX_ITERATIONS',
+                    'CRANOPENER_TIMEOUT_SECONDS')
+        InImage = @('CRANOPENER_OPENHANDS_GENERATOR',
+                    'CRANOPENER_OPENHANDS_KEEP_SETTINGS',
+                    'CRANOPENER_OPENHANDS_PYTHON',
+                    'OPENHANDS_PERSISTENCE_DIR',
+                    'OPENHANDS_WORK_DIR')
+    }
+}
+
 function Get-LitellmModelId {
     <#
     .SYNOPSIS

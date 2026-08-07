@@ -461,33 +461,27 @@ if ($Direct) {
 }
 
 if ($harness -eq 'openhands') {
-    # Everything run-openhands.sh reads from the environment, and nothing else.
-    # Each one is optional there and has a working default, so anything unset
-    # here is silence rather than breakage:
+    # The operator-facing subset of what run-openhands.sh reads. It reads more
+    # than this -- interpreter and generator paths, the persistence and work
+    # directories, a flag that reuses an existing settings file -- and every one
+    # of those names something that exists only inside the image, so forwarding
+    # a Windows-side value could only break a run that worked. Which is which is
+    # decided in Get-OpenHandsEnvNames, together with the reasons, because
+    # test-launcher.ps1 holds both halves against the variables the adapter
+    # actually reads. This comment used to claim it listed everything the
+    # adapter read and did not: CRANOPENER_LLM_BASE_URL was missing, so an
+    # operator who set it got the pod default and no diagnostic.
     #
-    #   CRANOPENER_LLM_API_KEY      a credential, so it goes through podman's
-    #                               `--env NAME` pass-through form -- the value
-    #                               is taken from this process instead of being
-    #                               written onto a command line, which is
-    #                               visible in process listings and is read by
-    #                               Windows Defender besides. Absent, the
-    #                               adapter sends 'unused', which is what a
-    #                               gateway with no master key expects and what
-    #                               opencode's own config already carries.
-    #   CRANOPENER_MAX_ITERATIONS   the only real bound on an unattended run:
-    #                               the CLI never passes max_iteration_per_run,
-    #                               so the SDK's own limit is 500 completions,
-    #                               and the gateway's spend cap needs a Postgres
-    #                               this stack does not provision.
-    #   CRANOPENER_TIMEOUT_SECONDS  the backstop the iteration cap cannot be,
-    #                               for a loop that emits no events at all.
+    # Each is optional in the adapter and has a working default, so anything
+    # unset here is silence rather than breakage.
     #
-    # Passed by name for all three, not just the key. Uniformity is the point:
-    # the day one of these stops being a plain number is the day a value-bearing
-    # form would have to be noticed and changed, and it would not be.
-    foreach ($n in 'CRANOPENER_LLM_API_KEY',
-                   'CRANOPENER_MAX_ITERATIONS',
-                   'CRANOPENER_TIMEOUT_SECONDS') {
+    # `--env NAME` with no value is podman's pass-through form: the value comes
+    # from this process rather than from a command line that is visible in
+    # process listings and read by Windows Defender besides. Used for all four
+    # rather than only the credential -- the day one of these stops being a
+    # plain number is the day a value-bearing form would have to be noticed and
+    # changed, and it would not be.
+    foreach ($n in (Get-OpenHandsEnvNames).Forward) {
         if ([Environment]::GetEnvironmentVariable($n)) { $runArgs += @('--env', $n) }
     }
 
