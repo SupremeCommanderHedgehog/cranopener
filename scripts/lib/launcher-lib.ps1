@@ -322,3 +322,39 @@ function Get-Sha256 {
     try { return [BitConverter]::ToString($sha.ComputeHash($Bytes)).Replace('-', '') }
     finally { $sha.Dispose() }
 }
+
+function Get-HarnessForModel {
+    <#
+    .SYNOPSIS
+      Decide which agent harness a model identifier requires.
+
+    .DESCRIPTION
+      Provider A refuses the `tools` parameter, so opencode cannot drive it --
+      it fails on its first tool call, and that failure reads as a gateway
+      outage rather than a misconfiguration. OpenHands renders tools into the
+      prompt and parses them back out itself, so it can.
+
+      Derived from the model rather than exposed as a flag on purpose. A flag
+      can be set to contradict the model, and the resulting failure is
+      expensive to diagnose and gives no hint of its cause.
+
+      Matching is on the namespace up to and including the separator. A bare
+      StartsWith on the namespace would also match 'provider-abc/', routing a
+      tool-capable provider to the wrong harness for a reason nobody would
+      think to look for.
+    #>
+    param(
+        [AllowNull()][AllowEmptyString()][string]$Model,
+        [string[]]$PromptModeNamespaces = @('provider-a')
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Model)) { return 'opencode' }
+
+    foreach ($ns in $PromptModeNamespaces) {
+        if ($Model.StartsWith("$ns/", [StringComparison]::OrdinalIgnoreCase)) {
+            return 'openhands'
+        }
+    }
+
+    return 'opencode'
+}

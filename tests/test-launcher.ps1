@@ -406,6 +406,41 @@ try {
     Remove-Item -Recurse -Force $fixtureDir -ErrorAction SilentlyContinue
 }
 
+# --- Get-HarnessForModel ---------------------------------------------------
+# opencode fails on its first tool call against a provider that refuses tools,
+# and the failure looks like a gateway outage. The routing rule is therefore
+# derived from the model rather than left to an operator flag.
+
+Assert-Eq 'a provider-a model selects openhands' `
+    'openhands' (Get-HarnessForModel 'provider-a/some-model')
+
+Assert-Eq 'a provider-b model selects opencode' `
+    'opencode' (Get-HarnessForModel 'provider-b/some-model')
+
+Assert-Eq 'a provider-c model selects opencode' `
+    'opencode' (Get-HarnessForModel 'provider-c/some-model')
+
+Assert-Eq 'no model at all selects opencode' `
+    'opencode' (Get-HarnessForModel '')
+
+Assert-Eq 'a null model selects opencode' `
+    'opencode' (Get-HarnessForModel $null)
+
+Assert-Eq 'the prefix match is case-insensitive' `
+    'openhands' (Get-HarnessForModel 'PROVIDER-A/Some-Model')
+
+# The valuable one. A naive StartsWith('provider-a') also matches
+# 'provider-abc/...', which would silently route a tool-capable provider to the
+# wrong harness. The separator has to be part of the match.
+Assert-Eq 'a longer namespace sharing the prefix is not matched' `
+    'opencode' (Get-HarnessForModel 'provider-abc/some-model')
+
+Assert-Eq 'a bare namespace with no model is still matched' `
+    'openhands' (Get-HarnessForModel 'provider-a/')
+
+Assert-Eq 'the prompt-mode set is overridable for testing' `
+    'openhands' (Get-HarnessForModel 'provider-z/m' -PromptModeNamespaces @('provider-z'))
+
 Write-Host ''
 Write-Host "test-launcher.ps1: $script:Run run, $script:Failed failed"
 if ($script:Failed -gt 0) { exit 1 }
