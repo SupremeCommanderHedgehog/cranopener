@@ -218,6 +218,32 @@ RUN set -eux; \
     aider --version; \
     openhands-python -c 'from openhands.sdk import LLM, Agent'
 
+# --- no public-skills fetch ---
+# The CLI hardcodes `load_public_skills=True` in
+# `AgentStore._build_agent_context()`, and the SDK honours it by cloning
+# github.com/OpenHands/extensions into ~/.openhands/cache/skills before the
+# agent starts -- on every run, and on a warm cache it fetches, checks out and
+# resets --hard rather than skipping. The target site is behind a corporate
+# proxy and an unexplained outbound git call per agent run is not acceptable
+# there; unreachable, it costs a DNS timeout per run and a logged error.
+#
+# Patched in the installed package because nothing softer works:
+# `_apply_runtime_config()` replaces `agent_context` unconditionally, so the
+# flag in the generated agent_settings.json is discarded before it is read, and
+# no environment variable turns it off (EXTENSIONS_REF only picks the branch).
+# The SDK's own field default is False; this restores it. `load_user_skills`
+# stays True -- local directories, no socket.
+#
+# The script refuses to run if the line it patches is not exactly where it
+# expects, and then proves the imported module reports the new value. That
+# guard is the point of the whole block: an upstream rename or reformat would
+# otherwise turn this into a silent no-op and the image would quietly go back
+# to calling GitHub on every run.
+COPY scripts/disable-public-skills.sh /tmp/disable-public-skills.sh
+RUN set -eux; \
+    bash /tmp/disable-public-skills.sh; \
+    rm /tmp/disable-public-skills.sh
+
 # --- config defaults and entrypoint (last: changes most often) ---
 # COPY preserves source file modes; the build context is synced from a
 # Windows host over tar/ssh and can land with owner-only (600/700) perms,

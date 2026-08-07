@@ -56,6 +56,16 @@ check "aider present"          aider --version
 # ImportError that reads like a broken image rather than a moved path.
 check "openhands SDK importable" \
   openhands-python -c 'from openhands.sdk import LLM, Agent'
+# The CLI hardcodes load_public_skills=True, which makes the SDK clone or fetch
+# github.com/OpenHands/extensions on every single startup; the build patches
+# that out (see the Dockerfile). Asserted by building the context the CLI builds
+# and reading the flag off it, so a stale .pyc or a patch that landed in the
+# wrong place fails here rather than in the field. An unpatched image fails this
+# check -- it answers True.
+check "openhands public skills disabled" \
+  openhands-python -c 'from openhands_cli.stores.agent_store import AgentStore
+c = AgentStore()._build_agent_context()
+raise SystemExit(0 if (c.load_public_skills is False and c.load_user_skills is True) else 1)'
 check "settings generator present" \
   test -f /usr/local/lib/cranopener/make-openhands-settings.py
 check "run-openhands present"  test -x /usr/local/bin/run-openhands.sh
