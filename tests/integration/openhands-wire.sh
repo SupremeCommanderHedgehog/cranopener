@@ -109,12 +109,29 @@ run_harness() {
   # denied, and the harness dies with "Permission denied: '/workspace'" on a
   # directory that is mode 0777. It is a no-op where SELinux is not enforcing.
   local ws="$1" log="$2" base="$3"
+  # MAX_ITERATIONS is a bound here, not a budget, and it is deliberately
+  # nowhere near what the fixture needs. The adapter counts every stream event
+  # rather than agent steps -- an action and its observation are two events for
+  # one step -- so the count is not the number of scripted turns. Measured
+  # against this fixture: 11 stream events for its five turns. The 20 that used
+  # to be here was therefore under a factor of two away, which two more turns
+  # would cross. Crossing it fails the successful-run assertion while every
+  # workspace assertion still passes, and that reads as the harness derailing
+  # rather than as a test constant being too tight -- on the machine where a
+  # rerun costs a 6GB image.
+  #
+  # A round number is the point, not an approximation of a tighter one.
+  # Anything within a factor of two of the fixture's count would have to be
+  # re-derived every time a turn is added to the script, and nothing here needs
+  # the cap to be tight: a runaway is caught just as well at 200, because the
+  # stub repeats its last scripted turn forever rather than ending the
+  # conversation, and TIMEOUT_SECONDS is the real backstop.
   podman run --rm \
     --add-host "host.containers.internal:host-gateway" \
     -v "$ws:/workspace:Z" \
     -e CRANOPENER_SEED_SRC=/nonexistent \
     -e "CRANOPENER_LLM_BASE_URL=$base" \
-    -e CRANOPENER_MAX_ITERATIONS=20 \
+    -e CRANOPENER_MAX_ITERATIONS=200 \
     -e CRANOPENER_TIMEOUT_SECONDS=240 \
     "$IMAGE" \
     run-openhands.sh openai/provider-a/fake "$TASK" \
