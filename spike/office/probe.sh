@@ -216,7 +216,11 @@ request() {
     # finding about the probe. A missing body is a probe failure and has to be
     # reported as one, because the alternative is a plausible HTTP status that
     # answers a question nobody asked.
-    if [ ! -s "$reqfile" ]; then
+    # -f as well as -s: `-s` alone is true for a directory on Linux, where a
+    # directory has a nonzero size, and false on Windows, where it does not.
+    # A path that is not a regular file is exactly the shape an environment
+    # failure leaves behind, and curl would be handed it either way.
+    if [ ! -f "$reqfile" ] || [ ! -s "$reqfile" ]; then
       printf '  !! could not build the request body: %s\n' "$reqfile"
       printf '     Nothing was sent, and there is no HTTP status for this step.\n'
       printf '     This is a probe failure, not an endpoint finding -- read\n'
