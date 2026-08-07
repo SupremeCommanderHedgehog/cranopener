@@ -29,6 +29,9 @@
 #   0  the run completed and the endpoint answered a plain request
 #   1  the endpoint never answered a plain request -- see 01b-* in the output
 #   2  configuration missing
+#   3  the probe could not build a request body, so it never asked. A failure
+#      of this script, not a finding about the endpoint -- the two are kept
+#      apart here because 1 is read as a verdict on the provider.
 #
 # Requires curl and python3, both of which are present on the machine this
 # runs from. It deliberately does NOT use jq: jq is absent on the authoring
@@ -78,6 +81,24 @@ done
 
 mkdir -p "$OUT" || exit 2
 
+# Everything this script says goes to the output directory as well as to the
+# terminal. In August a step failed before it reached curl, and the account of
+# why went to a terminal at the office and is gone -- leaving a captured
+# response that read like a provider finding and no record of the probe's own
+# behaviour. The kit's promise is that a failed trip is diagnosable at a desk,
+# and that promise does not survive the operator having to remember to pipe
+# through tee.
+#
+# Re-exec through a pipe rather than `exec > >(tee ...)`: process substitution
+# leaves tee racing the script's exit for the last lines written, and the last
+# lines are the ones that matter when something dies. PIPESTATUS preserves the
+# documented exit codes, which a bare pipe would replace with tee's.
+if [ "${PROBE_TEE_ACTIVE:-}" != '1' ]; then
+  export PROBE_TEE_ACTIVE=1
+  bash "$0" "$@" 2>&1 | tee "$OUT/00-probe-log.txt"
+  exit "${PIPESTATUS[0]}"
+fi
+
 # The key goes in a 0600 curl config file rather than on a command line.
 # /proc/<pid>/cmdline is world-readable and the office machine is not the
 # authoring machine; on Windows the same argument is visible to any process
@@ -91,11 +112,21 @@ trap 'rm -f "$AUTH"' EXIT
 # Authorization header with them, into a file this script would then leave on
 # disk. The -w fields below cover the same diagnostics -- TLS verification,
 # which host answered, how long it took -- without the credential.
+# size_upload and http_version are here because of what the August run could
+# not answer. Three requests reached the upstream with empty bodies and nothing
+# recorded said whether curl had put the bytes on the wire -- and "curl never
+# sent it" and "something between curl and the app dropped it" have opposite
+# fixes. size_upload settles that in one field. http_version is recorded
+# alongside it because the failures were HTTP/2 through a CONNECT tunnel while
+# every success was small enough to be uninteresting, and the version is the
+# first thing to compare when the retry below behaves differently.
 WFMT='http_code=%{http_code}
 ssl_verify_result=%{ssl_verify_result}
 remote_ip=%{remote_ip}
 content_type=%{content_type}
+size_upload=%{size_upload}
 size_download=%{size_download}
+http_version=%{http_version}
 time_total=%{time_total}
 url_effective=%{url_effective}
 '
@@ -159,13 +190,45 @@ PY
 #
 # Echoes the HTTP status on stdout; returns 0 only for 2xx.
 request() {
-  local label="$1" method="$2" path="$3" reqfile="${4:-}"
-  local meta rc code
+  local label="$1" method="$2" path="$3" reqfile="${4:-}" extra="${5:-}"
+  local meta rc code reqbytes=''
   local body="$OUT/$label-body.json"
+  # An array rather than an unquoted string so shellcheck stays happy and an
+  # option carrying a space cannot split. Expanded with the +alternate form
+  # because `set -u` treats "${empty[@]}" as unbound on bash before 4.4, and
+  # the machine this runs on at the office is not the machine it is written on.
+  local -a xopt=()
+  [ -n "$extra" ] && xopt=("$extra")
 
   : > "$body"
+  # A reused output directory is normal at the office. Clear this label's
+  # earlier artifacts up front, so a step that ends up sending nothing cannot
+  # leave the previous run's HTTP status sitting beside a meta file saying
+  # nothing was sent -- and that status is what gets read at a desk a week
+  # later.
+  rm -f "$OUT/$label-status.txt" "$OUT/$label-headers.txt"
 
   if [ "$method" = "POST" ]; then
+    # Never post a body this script cannot vouch for. In August the request
+    # bodies for step 3 were not built, curl posted the empty files without
+    # complaint, and the endpoint's "Invalid JSON ... EOF at line 1 column 0"
+    # was captured as though it were a finding about the endpoint. It was a
+    # finding about the probe. A missing body is a probe failure and has to be
+    # reported as one, because the alternative is a plausible HTTP status that
+    # answers a question nobody asked.
+    if [ ! -s "$reqfile" ]; then
+      printf '  !! could not build the request body: %s\n' "$reqfile"
+      printf '     Nothing was sent, and there is no HTTP status for this step.\n'
+      printf '     This is a probe failure, not an endpoint finding -- read\n'
+      printf '     %s-generator-stderr.txt for why the body was not built.\n' "$label"
+      printf 'request_bytes=0\nnot_sent=body-missing-or-empty\n' > "$OUT/$label-meta.txt"
+      # 3, not 1: callers propagate this to the exit status, and 1 is
+      # documented as "the endpoint never answered". A request that was never
+      # built was never asked, and saying otherwise moves the very conflation
+      # this guard exists to prevent somewhere a script would read it.
+      return 3
+    fi
+    reqbytes=$(wc -c < "$reqfile" | tr -d ' ')
     meta=$(curl -sS -K "$AUTH" \
                 -X POST \
                 -H 'Content-Type: application/json' \
@@ -174,6 +237,7 @@ request() {
                 -o "$body" \
                 -D "$OUT/$label-headers.txt" \
                 -w "$WFMT" \
+                ${xopt[@]+"${xopt[@]}"} \
                 --data-binary @"$reqfile" \
                 "$BASE$path" 2>"$OUT/$label-curl-stderr.txt")
     rc=$?
@@ -189,6 +253,10 @@ request() {
   fi
 
   printf '%s\ncurl_exit=%s\n' "$meta" "$rc" > "$OUT/$label-meta.txt"
+  # What the probe meant to send, next to curl's own size_upload above. They
+  # agree or something between this script and the wire is wrong, and that
+  # comparison is the one August could not make.
+  [ -n "$reqbytes" ] && printf 'request_bytes=%s\n' "$reqbytes" >> "$OUT/$label-meta.txt"
   code=$(printf '%s\n' "$meta" | sed -n 's/^http_code=//p')
   [ -n "$code" ] || code=000
 
@@ -205,6 +273,30 @@ request() {
     2*) return 0 ;;
     *)  return 1 ;;
   esac
+}
+
+# True when the captured body is the endpoint complaining about a body it never
+# received -- a parse failure at the very first byte. That is the August
+# signature, and it is worth exactly one retry. A refusal about size, auth, or
+# model naming is a real answer and must not drag a retry in behind it.
+empty_body_complaint() {
+  python3 - "$1" <<'PY'
+import json
+import sys
+
+try:
+    body = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(1)
+
+err = body.get("error") if isinstance(body, dict) else None
+if isinstance(err, dict):
+    message = str(err.get("message") or "")
+else:
+    message = str(err or "")
+message = message.lower()
+sys.exit(0 if ("eof while parsing" in message or "line 1 column 0" in message) else 1)
+PY
 }
 
 echo "probe.sh: writing every raw body to $OUT"
@@ -227,7 +319,8 @@ models_rc=$?
 # this fails, nothing below it means anything -- but the steps below still run,
 # because their captured bodies are what get diagnosed at home.
 say '1b. one plain completion, end to end'
-python3 - "$OUT/01b-chat-req.json" "$PROBE_MODEL" <<'PY'
+python3 - "$OUT/01b-chat-req.json" "$PROBE_MODEL" \
+  2>"$OUT/01b-chat-generator-stderr.txt" <<'PY'
 import json
 import sys
 
@@ -241,7 +334,12 @@ PY
 request 01b-chat POST /chat/completions "$OUT/01b-chat-req.json"
 reach_rc=$?
 
-if [ "$reach_rc" -ne 0 ]; then
+if [ "$reach_rc" -eq 3 ]; then
+  echo
+  echo '  !! The request body could not be built, so reachability was never'
+  echo '     tested. This is a failure of the probe, and nothing below it says'
+  echo '     anything about the endpoint either way.'
+elif [ "$reach_rc" -ne 0 ]; then
   echo
   echo '  !! Reachability failed. Everything below is still captured, but read'
   echo '     it as diagnostics rather than as findings: a tools rejection from'
@@ -256,7 +354,8 @@ fi
 # the second harness is unnecessary. Confirm the premise before spending the
 # rest of the visit on the thing built to work around it.
 say '2. the tools premise'
-python3 - "$OUT/02-tools-req.json" "$PROBE_MODEL" <<'PY'
+python3 - "$OUT/02-tools-req.json" "$PROBE_MODEL" \
+  2>"$OUT/02-tools-generator-stderr.txt" <<'PY'
 import json
 import sys
 
@@ -305,9 +404,14 @@ say '3. context window'
 echo "  ladder (tokens, largest first): $CONTEXT_LADDER"
 accepted_at=''
 rejected_at=''
+# Rungs that actually reached the wire. Without this, a ladder whose bodies all
+# failed to build reports that every size was refused -- a statement about the
+# endpoint, from a step that never spoke to it.
+attempted=0
 for tokens in $CONTEXT_LADDER; do
   label="03-context-$tokens"
-  python3 - "$OUT/$label-req.json" "$PROBE_MODEL" "$tokens" <<'PY'
+  python3 - "$OUT/$label-req.json" "$PROBE_MODEL" "$tokens" \
+    2>"$OUT/$label-generator-stderr.txt" <<'PY'
 import json
 import sys
 
@@ -325,15 +429,61 @@ json.dump({
 }, open(out, "w"))
 PY
   printf '\n  -- ~%s tokens --\n' "$tokens"
-  if request "$label" POST /chat/completions "$OUT/$label-req.json"; then
+  request "$label" POST /chat/completions "$OUT/$label-req.json"
+  ladder_rc=$?
+  if [ "$ladder_rc" -eq 0 ]; then
+    attempted=$((attempted + 1))
     accepted_at="$tokens"
     break
   fi
+  # Nothing reached the wire, so this rung refused nothing. Counting it as a
+  # rejection would put a bound on the window that no request ever tested.
+  if [ "$ladder_rc" -eq 3 ]; then
+    continue
+  fi
+  attempted=$((attempted + 1))
+
+  # August: three rungs rejected for a body the upstream never received, and
+  # the visit ended with no measurement and no mechanism. size_upload above now
+  # says whether curl sent the bytes; this says whether anything can be done
+  # about it. One extra request, rejected before generation and so billed for
+  # nothing, against another month of not knowing.
+  if empty_body_complaint "$OUT/$label-body.json"; then
+    echo
+    echo '  The endpoint is reporting a body it never received. That is not a'
+    echo '  finding about the window -- retrying over HTTP/1.1, because every'
+    echo '  failure of this shape so far was HTTP/2 through a CONNECT tunnel.'
+    if request "$label-retry-http11" POST /chat/completions \
+               "$OUT/$label-req.json" --http1.1; then
+      echo
+      echo "  !! The retry SUCCEEDED. The window is at least ~$tokens tokens, and"
+      echo '     the earlier rejection was about the protocol, not the size.'
+      echo '     Compare size_upload in the two meta files and record BOTH --'
+      echo '     this also means large requests need --http1.1 to get through.'
+      accepted_at="$tokens"
+      break
+    fi
+    echo
+    echo '     The retry failed the same way. Compare size_upload across both'
+    echo '     meta files: nonzero means the bytes left this machine and'
+    echo '     something upstream dropped them; zero means curl never sent'
+    echo '     them and the problem is on this side.'
+  fi
+
+  # Set only once the rung has genuinely been refused, retry included. Clearing
+  # it on a successful retry would be wrong: the retry says this rung was never
+  # really refused, and says nothing about a larger rung that was. Largest
+  # first means this ends up holding the smallest size actually refused, which
+  # is the tight upper bound for the bracket below.
   rejected_at="$tokens"
 done
 
 echo
-if [ -n "$accepted_at" ] && [ -n "$rejected_at" ]; then
+if [ "$attempted" -eq 0 ]; then
+  echo "  No size was tried: none of the request bodies could be built, so"
+  echo "  nothing was sent and nothing was refused. This says nothing about the"
+  echo "  window or the endpoint -- read the generator-stderr files."
+elif [ -n "$accepted_at" ] && [ -n "$rejected_at" ]; then
   echo "  Window is between ~$accepted_at and ~$rejected_at tokens."
 elif [ -n "$accepted_at" ]; then
   echo "  Accepted ~$accepted_at tokens, the largest size tried: the window is"
