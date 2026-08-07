@@ -39,12 +39,48 @@ check "rustc present"          rustc --version
 check "cargo present"          cargo --version
 check "cargo toolchain not world-writable" \
   sh -c 'test ! -w /usr/local/cargo/bin/cargo'
+# The single quotes are the check. $CARGO_HOME must be resolved by the shell
+# that runs inside the image, from the image's own environment. Double quotes
+# would expand it here instead, testing whatever value this script's shell holds
+# -- empty, in the normal case, which makes `test -w ""` fail and reports a
+# correctly configured image as broken.
+# shellcheck disable=SC2016
 check "user cargo home is writable"        \
   sh -c 'test -w "$CARGO_HOME"'
 check "dotnet present"         dotnet --version
 check "F# interactive present" dotnet fsi --version
 check "julia present"          julia --version
 check "R present"              R --version
+
+# Agent harnesses. Both ship pre-installed because the fallback has to already
+# be on the machine when the primary fails at a site that is a monthly trip
+# away and behind a proxy with its own CA bundle.
+check "openhands present"      openhands --help
+check "aider present"          aider --version
+# The generator builds a real openhands.sdk.Agent, so it needs the interpreter
+# the SDK was installed into. If this symlink breaks, the adapter fails with an
+# ImportError that reads like a broken image rather than a moved path.
+check "openhands SDK importable" \
+  openhands-python -c 'from openhands.sdk import LLM, Agent'
+# The CLI hardcodes load_public_skills=True, which makes the SDK clone or fetch
+# github.com/OpenHands/extensions on every single startup; the build patches
+# that out (see the Dockerfile). Asserted by building the context the CLI builds
+# and reading the flag off it, so a stale .pyc or a patch that landed in the
+# wrong place fails here rather than in the field. An unpatched image fails this
+# check -- it answers True.
+check "openhands public skills disabled" \
+  openhands-python -c 'from openhands_cli.stores.agent_store import AgentStore
+c = AgentStore()._build_agent_context()
+raise SystemExit(0 if (c.load_public_skills is False and c.load_user_skills is True) else 1)'
+check "settings generator present" \
+  test -f /usr/local/lib/cranopener/make-openhands-settings.py
+check "run-openhands present"  test -x /usr/local/bin/run-openhands.sh
+# Cheap proof the adapter is wired rather than merely copied, and it needs no
+# network: a model with no litellm provider prefix is refused before anything
+# else happens, because litellm would otherwise give up before opening a
+# socket and the run would exit 0 having sent nothing.
+check "run-openhands refuses a model with no litellm prefix" \
+  sh -c '! run-openhands.sh bare-model write a file'
 
 # Config seeding must have run via the entrypoint.
 check "seeded opencode.json"   test -f "$HOME/.config/opencode/opencode.json"

@@ -24,16 +24,55 @@
   environment `podman inspect` prints in plaintext. Do not leave it running
   indefinitely across projects you are no longer working in.
 
+.PARAMETER Model
+  The model to run, named exactly as the gateway's config.yaml names it --
+  e.g. provider-a/some-model. Omitted, opencode runs with whatever its own
+  config selects.
+
+  Always the gateway's name for it, never a harness's. Each harness needs the
+  id in its own dialect -- litellm wants a transport prefix, opencode wants its
+  provider id -- and both are added here, so the same string works for either.
+  With -Direct there is no gateway, so the model is whatever opencode's own
+  stock providers call it: anthropic/some-model.
+
+  This also selects the harness: a provider-A model runs under OpenHands,
+  everything else under opencode. Deliberately not a separate flag. A flag can
+  be set to contradict the model, and opencode against a provider that refuses
+  the `tools` parameter fails on its first tool call with an error that reads
+  as a gateway outage rather than as a misconfiguration.
+
 .EXAMPLE
   cranopener
   cranopener -Direct
-  cranopener run "fix the failing test"
   cranopener -Down
+
+.EXAMPLE
+  cranopener run "fix the failing test"
+
+  `run` is opencode's verb, and it belongs only to models that run under
+  opencode.
+
+.EXAMPLE
+  cranopener -Model provider-a/some-model "fix the failing test"
+
+  No verb. A provider-A model runs under OpenHands, where the whole argument
+  list is the task -- `run` would silently become the first word of the prompt,
+  so the launcher refuses it rather than spending a full iteration budget on a
+  corrupted instruction and reporting success.
 #>
-[CmdletBinding()]
+# PositionalBinding = $false, and it is load-bearing. Parameters are positional
+# by default in declaration order, so a plain [string]$Model silently claims
+# position 0 -- and every documented invocation of this script passes the agent
+# command there. `cranopener run "fix the failing test"` then binds Model='run'
+# and forwards `--model run` to opencode, which is a broken run dressed up as a
+# configured one. Named-only is the only form that cannot do that. $Remaining
+# still collects everything unbound, which is what makes the arguments flow
+# through untouched.
+[CmdletBinding(PositionalBinding = $false)]
 param(
     [switch]$Direct,
     [switch]$Down,
+    [string]$Model,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$Remaining
 )
@@ -80,6 +119,40 @@ Write-Host "cranopener: $project -> $workspace" -ForegroundColor DarkGray
 # who asked not to touch it.
 if ($Down -and $Direct) {
     throw '-Direct and -Down cannot be combined: -Down always acts on the shared gateway, and -Direct means no gateway is involved. Run cranopener -Down on its own to stop it.'
+}
+
+# Derived, never asked for. See the .PARAMETER Model note above: a harness flag
+# could be set to contradict the model, and that contradiction is the failure
+# this whole arrangement exists to make unrepresentable.
+$harness = Get-HarnessForModel $Model
+
+# Same shape of contradiction as -Direct/-Down above, for the same reason.
+# Provider A exists only as a model_list entry in the gateway's config -- it is
+# not a stock opencode provider and nothing outside the gateway serves it. So
+# -Direct, which promises no gateway, asks for a model that cannot be reached
+# by any route. Refusing here costs a line; allowing it costs a failure at an
+# endpoint the operator did not know they were not talking to. Checked before
+# anything is started, because the alternative is diagnosing this from podman's
+# output.
+if ($Direct -and $harness -eq 'openhands') {
+    throw "-Direct cannot be used with -Model $Model. That model is served only by the gateway, and -Direct bypasses the gateway entirely, so there is nothing to reach. Drop -Direct to run it through the gateway, or name a model your stock providers serve."
+}
+
+# The task itself, checked up here with the other contradictions rather than at
+# the point of use: everything between the two starts a gateway pod shared with
+# every other project, and bringing that up for a session that was never going
+# to run is a slow way to say no -- on a machine with no engine, a 90-second
+# way.
+#
+# Two objections, and the second is the one that costs money. There is no
+# interactive mode on this path, so a missing task is unrunnable; and there is
+# no verb either, so the `run` that every opencode example above builds into the
+# hand would be absorbed into the prompt and the run would proceed against an
+# instruction nobody wrote. The decision is in launcher-lib.ps1 so
+# test-launcher.ps1 can pin it without podman.
+if ($harness -eq 'openhands') {
+    $objection = Get-OpenHandsTaskObjection -Remaining $Remaining -Model $Model
+    if ($objection) { throw $objection }
 }
 
 if ($Down) {
@@ -406,6 +479,47 @@ if ($Direct) {
     }
 }
 
+if ($harness -eq 'openhands') {
+    # The operator-facing subset of what run-openhands.sh reads. It reads more
+    # than this -- interpreter and generator paths, the persistence and work
+    # directories, a flag that reuses an existing settings file -- and every one
+    # of those names something that exists only inside the image, so forwarding
+    # a Windows-side value could only break a run that worked. Which is which is
+    # decided in Get-OpenHandsEnvNames, together with the reasons, because
+    # test-launcher.ps1 holds both halves against the variables the adapter
+    # actually reads. This comment used to claim it listed everything the
+    # adapter read and did not: CRANOPENER_LLM_BASE_URL was missing, so an
+    # operator who set it got the pod default and no diagnostic.
+    #
+    # Each is optional in the adapter and has a working default, so anything
+    # unset here is silence rather than breakage.
+    #
+    # `--env NAME` with no value is podman's pass-through form: the value comes
+    # from this process rather than from a command line that is visible in
+    # process listings and read by Windows Defender besides. Used for all four
+    # rather than only the credential -- the day one of these stops being a
+    # plain number is the day a value-bearing form would have to be noticed and
+    # changed, and it would not be.
+    foreach ($n in (Get-OpenHandsEnvNames).Forward) {
+        if ([Environment]::GetEnvironmentVariable($n)) { $runArgs += @('--env', $n) }
+    }
+
+    # The session's own outbound TLS. opencode gets NODE_EXTRA_CA_CERTS above;
+    # these are the Python equivalents, and OpenHands is Python. Nothing on the
+    # LLM path needs them -- the gateway is plain HTTP over the pod's shared
+    # network namespace and the gateway owns the upstream TLS -- but the agent
+    # runs git, pip, and uv against a proxy with its own roots, and a failure
+    # there surfaces mid-task as an unexplained tool error.
+    #
+    # These REPLACE the default trust store rather than adding to it, which is
+    # exactly why the bundle is validated above as a complete one. Set only on
+    # this path: opencode's behaviour today is the behaviour that works.
+    $runArgs += @(
+        '--env', 'SSL_CERT_FILE=/etc/ssl/certs/extra-roots.pem',
+        '--env', 'REQUESTS_CA_BUNDLE=/etc/ssl/certs/extra-roots.pem'
+    )
+}
+
 # NO_PROXY is computed rather than passed through, so it has to carry a value.
 # It is not a credential, so argv is fine. In proxied mode the gateway is
 # reached over the pod's shared network namespace -- without localhost here a
@@ -422,7 +536,35 @@ $runArgs += $Image
 # in `exec "$@"`. Passing bare arguments would run `exec run ...` and die with
 # "run: command not found", so the binary is named explicitly. With no
 # arguments the image's own CMD applies.
-if ($Remaining) { $runArgs += @('opencode') + $Remaining }
+if ($harness -eq 'openhands') {
+    # $Remaining is non-empty here: a task is required, and the refusal for a
+    # missing one is up with the other contradictions, before the shared gateway
+    # is touched.
+    #
+    # run-openhands.sh is the one stable interface in front of a CLI that has
+    # already changed shape once upstream, and it takes a model id litellm can
+    # resolve. Get-LitellmModelId adds the transport prefix; the adapter refuses
+    # anything it cannot resolve rather than repairing it, so both halves of
+    # that contract are load-bearing.
+    $runArgs += @('run-openhands.sh', (Get-LitellmModelId $Model)) + $Remaining
+} else {
+    # -Model has to reach opencode whether or not there are other arguments.
+    # Gating the whole branch on $Remaining, as this did when opencode was the
+    # only harness, would silently drop the model on a bare `cranopener -Model
+    # provider-b/...` and start opencode on whatever its config names -- a wrong
+    # answer wearing a right one's clothes.
+    $openArgs = @()
+    if ($Remaining) { $openArgs += $Remaining }
+    # Qualified, not passed through. opencode splits a model id on the first
+    # '/' to pick a provider, so the gateway id it is given here would be read
+    # as provider 'provider-b' with model 'PLACEHOLDER-MODEL' -- neither of
+    # which exists. Measured: the bare form exits 1 with "Unexpected server
+    # error" having sent zero requests, which points at the gateway rather than
+    # at the argument. Get-OpencodeModelId leaves -Direct alone, where the
+    # operator names a stock provider themselves.
+    if ($Model) { $openArgs += @('--model', (Get-OpencodeModelId $Model -Direct:$Direct)) }
+    if ($openArgs) { $runArgs += @('opencode') + $openArgs }
+}
 
 podman @runArgs
 exit $LASTEXITCODE

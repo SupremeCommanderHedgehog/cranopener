@@ -90,6 +90,58 @@ identifiers, and credentials belong only in `~\.cranopener`, which is never
 committed. `install.ps1` never overwrites what is already there, and reports
 which files have drifted from the shipped templates.
 
+## Two harnesses
+
+Providers that support native tool calling run under opencode. One provider
+does not accept the `tools` parameter at all, so it runs under OpenHands
+instead, which renders the tool definitions into the prompt and parses the
+calls back out of the reply. Nothing here translates between the two: a shim
+that made a tool-refusing endpoint look tool-capable to opencode was designed,
+costed, and cancelled, and the second harness exists so that this repository
+never owns one.
+
+```powershell
+cranopener                                        # opencode, whatever its config names
+cranopener -Model provider-b/a-model run "..."    # opencode, explicit model
+cranopener -Model provider-a/a-model "fix the failing test"   # OpenHands, NO verb
+```
+
+Note the missing `run` on the last line. It is opencode's verb, and the
+OpenHands path has none — the whole argument list is the task, so `run` would
+become the first word of the prompt and the session would spend its entire
+iteration budget on an instruction nobody wrote, then report success. The
+launcher refuses that combination rather than absorbing it.
+
+`-Model` takes the model id as the gateway names it, and the harness follows
+from that id. There is no flag to pick one, because a flag can be set to
+contradict the model: point opencode at a provider that refuses tools and it
+fails on its first tool call, with an error that reads as a gateway outage
+rather than a misconfiguration. That is expensive to diagnose and trivial to
+prevent, so the combination is not expressible. The other known-bad pairing is
+refused outright — `-Direct` with such a model is an error, since that provider
+exists only behind the gateway and `-Direct` is what bypasses it.
+
+Both harnesses are in the image, along with aider as a fallback. Nothing is
+installed at run time: the target site is behind a proxy with its own CA
+bundle, and a fallback that has to be downloaded on the day it is needed is not
+a fallback.
+
+**Bound every unattended run.** `CRANOPENER_MAX_ITERATIONS`, default 50, stops
+the OpenHands path after that many events in the harness's own event stream.
+It is a bound, not a budget: an event is not an agent step, so 50 events is
+roughly 15 to 25 real steps, and it should be set well above what the task
+needs rather than tuned down to it. It exists because nothing else would stop a
+runaway loop — the harness's own limit is 500 completions and is not
+configurable, and the spend cap at the gateway is the unenforced one described
+above. `CRANOPENER_TIMEOUT_SECONDS`, default 3600, is the wall-clock backstop
+for a loop that emits no events at all.
+
+Exit status means what it says on this path. The underlying CLI exits 0 even
+when every request to the provider failed — measured, on a run that took a hard
+rejection on all 500 of them — so the verdict is taken from the event stream
+instead: a conversation error, a run that never reached the provider, or a run
+stopped by either bound all exit non-zero and print why.
+
 ## How it stays current
 
 A scheduled build runs on the 1st of each month. It resolves the latest

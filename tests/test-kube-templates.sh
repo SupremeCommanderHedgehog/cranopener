@@ -6,7 +6,10 @@
 # Windows host. python3 covers both YAML and JSON rather than adding jq as a
 # second prerequisite -- the value of this file is that it runs everywhere.
 set -uo pipefail
-cd "$(dirname "$0")/.."
+# Fatal: every template path below is repo-relative, and several assertions are
+# greps for a string being absent -- which a missing file satisfies trivially.
+cd "$(dirname "$0")/.." || { echo "${0##*/}: cannot reach the repository root" >&2; exit 1; }
+# shellcheck source=tests/lib/assert.sh
 . tests/lib/assert.sh
 
 if ! python3 -c 'import yaml' >/dev/null 2>&1; then
@@ -116,7 +119,7 @@ assert_eq 'no .mil or .gov hostnames in templates' '' "${leaked% }"
 # launcher now names these variables, not the templates.
 unexpected=$(grep -rIohE '\b[A-Z][A-Z0-9_]*_API_KEY\b' kube/ scripts/ 2>/dev/null \
   | sort -u \
-  | grep -vE '^(PROVIDER_[ABC]|ANTHROPIC|OPENAI)_API_KEY$' \
+  | grep -vE '^(PROVIDER_[ABC]|ANTHROPIC|OPENAI|CRANOPENER_LLM)_API_KEY$' \
   | tr '\n' ' ')
 assert_eq 'gateway credentials use generic PROVIDER_* names' '' "${unexpected% }"
 

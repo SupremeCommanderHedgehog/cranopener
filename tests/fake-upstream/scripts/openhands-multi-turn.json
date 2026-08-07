@@ -1,0 +1,31 @@
+{
+  "_comment": [
+    "Scripted assistant turns that carry the action syntax the OpenHands prompt",
+    "asks for, so a harness in prompt mode keeps going instead of stopping after",
+    "one reply. edit-hello.json is plain prose on purpose -- prose is a finished",
+    "answer, and the conversation ends there, which proves nothing about turn",
+    "three where flattened history actually breaks.",
+    "",
+    "This is TEST DATA, not a dialect this repository understands. It was copied",
+    "verbatim from the system prompt the harness itself sent to the fake upstream",
+    "(recorded request req-001.json): the format block ending 'ONLY reply in the",
+    "following format with NO suffix', and the parameter lists of FUNCTION #1",
+    "terminal and FUNCTION #5 finish. Nothing here parses it -- the harness does.",
+    "If the upstream renames a tool or reorders a parameter these turns stop",
+    "being understood, and the integration test says so by failing the turn",
+    "count. Re-derive them the same way: run the harness against the stub and",
+    "read the system prompt out of the recorded body.",
+    "",
+    "The turns are terminal calls rather than file_editor calls because the",
+    "assertion downstream is that the harness wrote to the workspace, and a shell",
+    "redirect writes the file through the same runtime with fewer parameters to",
+    "keep in step with upstream."
+  ],
+  "responses": [
+    "I will look at the workspace first.\n\n<function=terminal>\n<parameter=command>ls -la /workspace</parameter>\n<parameter=security_risk>LOW</parameter>\n<parameter=summary>List the workspace</parameter>\n</function>",
+    "Now I will create the file that was asked for.\n\n<function=terminal>\n<parameter=command>printf 'hello\\n' > /workspace/hello.txt</parameter>\n<parameter=security_risk>LOW</parameter>\n<parameter=summary>Create hello.txt</parameter>\n</function>",
+    "The file is created. Let me confirm it is on disk.\n\n<function=terminal>\n<parameter=command>cat /workspace/hello.txt</parameter>\n<parameter=security_risk>LOW</parameter>\n<parameter=summary>Read hello.txt back</parameter>\n</function>",
+    "Confirmed. One more check that nothing else was left behind.\n\n<function=terminal>\n<parameter=command>ls -la /workspace</parameter>\n<parameter=security_risk>LOW</parameter>\n<parameter=summary>List the workspace again</parameter>\n</function>",
+    "<function=finish>\n<parameter=message>hello.txt was created in /workspace and contains the word hello.</parameter>\n<parameter=summary>Report the created file</parameter>\n</function>"
+  ]
+}

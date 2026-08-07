@@ -322,3 +322,278 @@ function Get-Sha256 {
     try { return [BitConverter]::ToString($sha.ComputeHash($Bytes)).Replace('-', '') }
     finally { $sha.Dispose() }
 }
+
+function Get-HarnessForModel {
+    <#
+    .SYNOPSIS
+      Decide which agent harness a model identifier requires.
+
+    .DESCRIPTION
+      Provider A refuses the `tools` parameter, so opencode cannot drive it --
+      it fails on its first tool call, and that failure reads as a gateway
+      outage rather than a misconfiguration. OpenHands renders tools into the
+      prompt and parses them back out itself, so it can.
+
+      Derived from the model rather than exposed as a flag on purpose. A flag
+      can be set to contradict the model, and the resulting failure is
+      expensive to diagnose and gives no hint of its cause.
+
+      Matching is on the namespace up to and including the separator. A bare
+      StartsWith on the namespace would also match 'provider-abc/', routing a
+      tool-capable provider to the wrong harness for a reason nobody would
+      think to look for.
+    #>
+    param(
+        [AllowNull()][AllowEmptyString()][string]$Model,
+        [string[]]$PromptModeNamespaces = @('provider-a')
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Model)) { return 'opencode' }
+
+    # Trimmed before matching because this function's two outcomes are not
+    # equally safe. Falling through to opencode is the failure it exists to
+    # prevent, so a stray leading space -- from a quoted argument or a copied
+    # model id -- must not be the thing that causes it.
+    $Model = $Model.Trim()
+
+    foreach ($ns in $PromptModeNamespaces) {
+        if ($Model.StartsWith("$ns/", [StringComparison]::OrdinalIgnoreCase)) {
+            return 'openhands'
+        }
+    }
+
+    return 'opencode'
+}
+
+function Get-OpenHandsEnvNames {
+    <#
+    .SYNOPSIS
+      Which environment variables the launcher forwards into an OpenHands
+      session, and which it reads but deliberately leaves behind.
+
+    .DESCRIPTION
+      run-openhands.sh reads nine variables from its environment. Only some of
+      them are anything an operator on this side of the container has business
+      setting, and which is which is not obvious from either file -- which is
+      how CRANOPENER_LLM_BASE_URL came to be used by
+      tests/integration/openhands-wire.sh, covered by a launcher comment
+      claiming to forward "everything run-openhands.sh reads from the
+      environment, and nothing else", and silently dropped. An operator who set
+      it got the pod default with no diagnostic at all.
+
+      Both halves are returned, not just the forwarded one, so
+      test-launcher.ps1 can hold the pair against the variables the adapter
+      actually reads and fail when they stop agreeing. A comment asserting its
+      own completeness is worse than no comment, because it stops the next
+      reader checking; this is the same assertion in a form that cannot quietly
+      stop being true.
+
+      Forward:
+        CRANOPENER_LLM_API_KEY      the credential.
+        CRANOPENER_LLM_BASE_URL     which endpoint. Its default is the gateway
+                                    on the pod's shared network namespace --
+                                    right for the ordinary case and wrong for
+                                    anyone aiming a session somewhere else, and
+                                    being wrong silently is the expensive part.
+        CRANOPENER_MAX_ITERATIONS   the only real bound on an unattended run.
+        CRANOPENER_TIMEOUT_SECONDS  the backstop the iteration cap cannot be.
+
+      InImage -- read by the adapter, deliberately not forwarded:
+        CRANOPENER_OPENHANDS_GENERATOR, CRANOPENER_OPENHANDS_PYTHON
+                                    paths to files that exist only inside the
+                                    image. A value set on Windows names nothing
+                                    the container can open, so forwarding one
+                                    could only break a run that worked.
+        CRANOPENER_OPENHANDS_KEEP_SETTINGS
+                                    reuses an agent_settings.json already on
+                                    disk instead of generating one. Nothing is
+                                    mounted at the persistence directory, so
+                                    the only file it could reuse is one this
+                                    launcher did not put there.
+        OPENHANDS_PERSISTENCE_DIR, OPENHANDS_WORK_DIR
+                                    container-side paths the launcher has
+                                    already decided by mounting the working
+                                    directory at /workspace, which is
+                                    OPENHANDS_WORK_DIR's default. Moving either
+                                    aims the harness at somewhere nothing is
+                                    mounted.
+
+      Nothing is forwarded by value: `podman --env NAME` takes it from the
+      launcher's own process. Uniform across all four rather than only the
+      credential, because the day one of these stops being a plain number is
+      the day a value-bearing form would have to be noticed and would not be.
+    #>
+
+    return @{
+        Forward = @('CRANOPENER_LLM_API_KEY',
+                    'CRANOPENER_LLM_BASE_URL',
+                    'CRANOPENER_MAX_ITERATIONS',
+                    'CRANOPENER_TIMEOUT_SECONDS')
+        InImage = @('CRANOPENER_OPENHANDS_GENERATOR',
+                    'CRANOPENER_OPENHANDS_KEEP_SETTINGS',
+                    'CRANOPENER_OPENHANDS_PYTHON',
+                    'OPENHANDS_PERSISTENCE_DIR',
+                    'OPENHANDS_WORK_DIR')
+    }
+}
+
+function Get-OpenHandsTaskObjection {
+    <#
+    .SYNOPSIS
+      Why these arguments cannot be an OpenHands task, or $null if they can.
+
+    .DESCRIPTION
+      Two failures, both of which the rest of this project makes easy to walk
+      into, and neither of which podman or the adapter can diagnose usefully
+      once the session has started.
+
+      No task at all. The adapter runs `openhands --headless -t "TASK"` and
+      there is no interactive mode on this path to fall back to.
+
+      A leading `run`. That is opencode's grammar, and every .EXAMPLE in
+      cranopener.ps1 uses it, so it is exactly what a hand reaches for. On the
+      OpenHands path there is no verb -- the adapter does TASK="$*" -- so
+      `cranopener -Model provider-a/x run "fix the thing"` becomes the task
+      `run fix the thing`. That is not a failure anyone would notice: the run
+      proceeds, spends its whole iteration budget against a corrupted
+      instruction, and reports success. Refused for the same reason -Direct
+      with a gateway-only model is refused -- the launcher can see the
+      combination is wrong, and saying so costs one line.
+
+      Deliberately not "handled" by stripping the verb. A launcher that
+      silently rewrote the operator's words would be guessing at intent, and
+      the guess is wrong for the task 'run the migration and report'. Refusing
+      names the problem and leaves the sentence to the person who meant it.
+
+      Returned as a string rather than thrown so the decision can be tested
+      without invoking the launcher, which needs podman and an install tree.
+    #>
+    param(
+        [AllowNull()][string[]]$Remaining,
+        [AllowNull()][AllowEmptyString()][string]$Model
+    )
+
+    $shown = if ([string]::IsNullOrWhiteSpace($Model)) { '<model>' } else { $Model.Trim() }
+
+    if (-not $Remaining) {
+        return "-Model $shown runs under OpenHands, which has no interactive mode here -- it needs a task. Try: cranopener -Model $shown `"fix the failing test`""
+    }
+
+    # -eq on strings is case-insensitive in PowerShell, which is what is wanted:
+    # `Run` is the same mistake as `run`.
+    if ([string]$Remaining[0] -and ([string]$Remaining[0]).Trim() -eq 'run') {
+        return "-Model $shown runs under OpenHands, which has no 'run' verb -- the whole argument list is the task, so this would run the task 'run ...' instead of the one you typed, spend its entire iteration budget on it, and report success. 'run' is opencode's verb and belongs only to models that use opencode. Drop it: cranopener -Model $shown `"fix the failing test`""
+    }
+
+    return $null
+}
+
+function Get-LitellmModelId {
+    <#
+    .SYNOPSIS
+      Render a gateway model id as an argument litellm can resolve.
+
+    .DESCRIPTION
+      Two names are involved here and they are very easy to conflate. The
+      gateway's model id -- 'provider-a/some-model' -- is what the operator
+      types, and it is what must appear in the request body LiteLLM receives,
+      because that is the `model_name` its `model_list` matches on. The litellm
+      CLIENT inside the harness needs something else first: a leading transport
+      prefix telling it how to dial. It splits on the FIRST '/', so
+      'openai/provider-a/some-model' resolves the transport as 'openai' and
+      leaves 'provider-a/some-model' as the model -- exactly the id the gateway
+      is listening for. The base URL then decides where the request goes.
+
+      The prefix is an internal detail of how the harness dials, so it is added
+      here and appears in no template, no installed file, and nothing the
+      operator types.
+
+      Always prepended, never conditionally. Treating an id that already begins
+      with a transport-looking segment as pre-prefixed would corrupt a gateway
+      model legitimately named 'openai/...' -- an ordinary model_list entry --
+      by sending only the remainder as the model name, which LiteLLM answers
+      with a model-not-found that reads as a broken gateway.
+
+      Applied here rather than in run-openhands.sh because the adapter's
+      contract is to REFUSE a model it cannot resolve, and container-checks.sh
+      pins that refusal. An adapter that quietly prefixed instead would make its
+      own guard unreachable, and that guard is the only thing between a
+      hand-run adapter and the failure below.
+
+      An empty model throws rather than yielding a bare 'openai/'. That is the
+      quietest failure in this whole path: litellm gives up before opening a
+      socket, so the harness makes zero requests, reports no error, and exits 0
+      -- indistinguishable from a clean run that had nothing to say.
+    #>
+    param(
+        [AllowNull()][AllowEmptyString()][string]$Model,
+        [string]$Transport = 'openai'
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Model)) {
+        throw "Get-LitellmModelId: no model to prefix. litellm resolves the transport from the leading segment of the model id; with nothing to resolve it gives up before opening a socket, and the harness then reports success having sent no requests at all."
+    }
+
+    # Trimmed for the same reason Get-HarnessForModel trims: a stray space from
+    # a quoted argument or a copied model id must not become part of the name
+    # the gateway is asked to match.
+    return "$Transport/$($Model.Trim())"
+}
+
+function Get-OpencodeModelId {
+    <#
+    .SYNOPSIS
+      Render a gateway model id as an argument opencode can resolve.
+
+    .DESCRIPTION
+      The same two-names problem as Get-LitellmModelId, one layer out. opencode
+      identifies a model as '<provider id>/<model key>' and splits on the FIRST
+      '/' to pick the provider, so the gateway id 'provider-b/PLACEHOLDER-MODEL'
+      passed through untouched is read as provider 'provider-b' with model
+      'PLACEHOLDER-MODEL' -- and neither exists. The gateway is not an opencode
+      provider; it is reached through the one opencode.proxied.json declares,
+      whose `models` map is keyed by the full gateway id.
+
+      This was measured, both forms, against the image with a stub endpoint
+      recording every request:
+
+        --model provider-b/PLACEHOLDER-MODEL
+            exit 1, "UnknownError: Unexpected server error", ZERO requests sent
+        --model cranopener/provider-b/PLACEHOLDER-MODEL
+            exit 0, endpoint received model='provider-b/PLACEHOLDER-MODEL'
+
+      The failing form is loud, which is the one merciful thing about it, but
+      "Unexpected server error" points at the gateway rather than at the
+      argument, and the gateway is the expensive place to go looking.
+
+      -Direct is the exception and not a special case: it means no gateway is
+      involved and opencode uses its own stock providers, where the operator has
+      already named one ('anthropic/some-model'). Qualifying that would invent a
+      provider that does not exist.
+
+      Always prefixed otherwise, never conditionally, for the reason spelled out
+      in Get-LitellmModelId: a gateway model legitimately named 'cranopener/...'
+      would otherwise be sent as a model key its provider does not have.
+
+    .PARAMETER ProviderId
+      The provider key in opencode.proxied.json. A parameter rather than a
+      literal so test-launcher.ps1 can read the shipped config and assert the
+      default still matches it -- a rename there is otherwise invisible until
+      every proxied run fails naming a provider opencode has never heard of.
+    #>
+    param(
+        [AllowNull()][AllowEmptyString()][string]$Model,
+        [switch]$Direct,
+        [string]$ProviderId = 'cranopener'
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Model)) {
+        throw "Get-OpencodeModelId: no model to qualify. opencode resolves the provider from the leading segment of the model id, so a bare '$ProviderId/' names no model at all and the run fails before it sends anything."
+    }
+
+    $Model = $Model.Trim()
+
+    if ($Direct) { return $Model }
+
+    return "$ProviderId/$Model"
+}

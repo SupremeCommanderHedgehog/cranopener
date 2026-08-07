@@ -406,6 +406,293 @@ try {
     Remove-Item -Recurse -Force $fixtureDir -ErrorAction SilentlyContinue
 }
 
+# --- Get-HarnessForModel ---------------------------------------------------
+# opencode fails on its first tool call against a provider that refuses tools,
+# and the failure looks like a gateway outage. The routing rule is therefore
+# derived from the model rather than left to an operator flag.
+
+Assert-Eq 'a provider-a model selects openhands' `
+    'openhands' (Get-HarnessForModel 'provider-a/some-model')
+
+Assert-Eq 'a provider-b model selects opencode' `
+    'opencode' (Get-HarnessForModel 'provider-b/some-model')
+
+Assert-Eq 'a provider-c model selects opencode' `
+    'opencode' (Get-HarnessForModel 'provider-c/some-model')
+
+Assert-Eq 'no model at all selects opencode' `
+    'opencode' (Get-HarnessForModel '')
+
+Assert-Eq 'a null model selects opencode' `
+    'opencode' (Get-HarnessForModel $null)
+
+Assert-Eq 'the prefix match is case-insensitive' `
+    'openhands' (Get-HarnessForModel 'PROVIDER-A/Some-Model')
+
+# The valuable one. A naive StartsWith('provider-a') also matches
+# 'provider-abc/...', which would silently route a tool-capable provider to the
+# wrong harness. The separator has to be part of the match.
+Assert-Eq 'a longer namespace sharing the prefix is not matched' `
+    'opencode' (Get-HarnessForModel 'provider-abc/some-model')
+
+Assert-Eq 'a bare namespace with no model is still matched' `
+    'openhands' (Get-HarnessForModel 'provider-a/')
+
+Assert-Eq 'the prompt-mode set is overridable for testing' `
+    'openhands' (Get-HarnessForModel 'provider-z/m' -PromptModeNamespaces @('provider-z'))
+
+# The two outcomes are not equally safe: falling through to opencode is the
+# failure this function exists to prevent. A stray leading space must not be
+# what causes it.
+Assert-Eq 'surrounding whitespace does not route to the wrong harness' `
+    'openhands' (Get-HarnessForModel '  provider-a/some-model  ')
+
+# An override that merely added to the default would pass every assertion
+# above while silently keeping provider-a in prompt mode.
+Assert-Eq 'the override replaces the default rather than adding to it' `
+    'opencode' (Get-HarnessForModel 'provider-a/m' -PromptModeNamespaces @('provider-z'))
+
+# --- Get-LitellmModelId ----------------------------------------------------
+# Two names that are easy to conflate. The gateway's model id is what the
+# operator types and what LiteLLM matches its model_list on; the transport
+# prefix is what the litellm client needs in order to know how to dial. Getting
+# the second wrong is the quietest failure in this project -- litellm gives up
+# before opening a socket, so the harness makes zero requests, reports nothing,
+# and exits 0.
+
+Assert-Eq 'a gateway model id gains the transport prefix' `
+    'openai/provider-a/some-model' (Get-LitellmModelId 'provider-a/some-model')
+
+# The property that actually matters, expressed the way litellm evaluates it:
+# it splits on the FIRST '/', and everything after that split is the model name
+# that reaches the wire. It has to be the gateway's model_name character for
+# character, or LiteLLM matches nothing.
+$prefixed = Get-LitellmModelId 'provider-a/some-model'
+Assert-Eq 'what follows the first separator is the untouched gateway id' `
+    'provider-a/some-model' $prefixed.Substring($prefixed.IndexOf('/') + 1)
+
+Assert-Eq 'surrounding whitespace is trimmed rather than prefixed' `
+    'openai/provider-a/m' (Get-LitellmModelId '  provider-a/m  ')
+
+# A model_list entry named openai/... is an ordinary thing to write. Treating
+# such an id as already prefixed would send 'gpt-x' where the gateway is
+# listening for 'openai/gpt-x', and the model-not-found that comes back reads
+# as a broken gateway rather than as a mangled argument.
+Assert-Eq 'an id that already looks prefixed is prefixed anyway' `
+    'openai/openai/gpt-x' (Get-LitellmModelId 'openai/gpt-x')
+
+Assert-Eq 'the transport is a parameter rather than a literal' `
+    'custom/provider-a/m' (Get-LitellmModelId 'provider-a/m' -Transport 'custom')
+
+# A bare 'openai/' is the failure this function exists to prevent, handed to the
+# harness in a form that looks well-formed. Throwing is the only safe answer:
+# there is no model to run, and a run that sends nothing exits 0.
+$threw = $false
+try { Get-LitellmModelId '' | Out-Null } catch { $threw = $true }
+Assert-Eq 'an empty model throws rather than yielding a bare prefix' $true $threw
+
+$threw = $false
+try { Get-LitellmModelId $null | Out-Null } catch { $threw = $true }
+Assert-Eq 'a null model throws rather than yielding a bare prefix' $true $threw
+
+$threw = $false
+try { Get-LitellmModelId '   ' | Out-Null } catch { $threw = $true }
+Assert-Eq 'a whitespace-only model throws rather than yielding a bare prefix' $true $threw
+
+# --- Get-OpencodeModelId ---------------------------------------------------
+# The same two-names confusion as Get-LitellmModelId, one layer out, and it was
+# wrong here until it was measured. opencode names a model
+# `<its own provider id>/<the model key>`, splitting on the FIRST '/' exactly as
+# litellm does -- so the gateway id 'provider-b/PLACEHOLDER-MODEL', passed
+# through untouched, is read as provider 'provider-b', model
+# 'PLACEHOLDER-MODEL', and neither exists.
+#
+# Measured against the image, both forms, with a stub endpoint recording every
+# request: the bare form exits 1 with "UnknownError: Unexpected server error"
+# and sends ZERO requests; the qualified form exits 0 and the endpoint receives
+# model='provider-b/PLACEHOLDER-MODEL'. The provider prefix is not decoration.
+
+Assert-Eq 'a gateway model id gains the opencode provider prefix' `
+    'cranopener/provider-b/PLACEHOLDER-MODEL' `
+    (Get-OpencodeModelId 'provider-b/PLACEHOLDER-MODEL')
+
+# The property that matters, expressed the way opencode evaluates it. What
+# follows the first separator is looked up in that provider's `models` map, so
+# it has to be the gateway id character for character.
+$qualified = Get-OpencodeModelId 'provider-b/PLACEHOLDER-MODEL'
+Assert-Eq 'what follows the first separator is the untouched gateway id' `
+    'provider-b/PLACEHOLDER-MODEL' $qualified.Substring($qualified.IndexOf('/') + 1)
+
+# -Direct means the gateway is not involved and opencode uses its own stock
+# providers, where the operator already names one -- 'anthropic/some-model'.
+# Prefixing there would invent a provider that does not exist.
+Assert-Eq 'a direct-mode model keeps whatever provider it names' `
+    'anthropic/some-model' (Get-OpencodeModelId 'anthropic/some-model' -Direct)
+
+Assert-Eq 'surrounding whitespace is trimmed rather than prefixed' `
+    'cranopener/provider-b/m' (Get-OpencodeModelId '  provider-b/m  ')
+
+Assert-Eq 'surrounding whitespace is trimmed in direct mode too' `
+    'anthropic/some-model' (Get-OpencodeModelId '  anthropic/some-model  ' -Direct)
+
+# Same argument as Get-LitellmModelId: a gateway model_list entry named
+# 'cranopener/...' is an ordinary thing for an operator to write, and treating
+# it as already qualified would send a model key that provider does not have.
+Assert-Eq 'an id that already looks qualified is qualified anyway' `
+    'cranopener/cranopener/m' (Get-OpencodeModelId 'cranopener/m')
+
+Assert-Eq 'the provider id is a parameter rather than a literal' `
+    'other/provider-b/m' (Get-OpencodeModelId 'provider-b/m' -ProviderId 'other')
+
+$threw = $false
+try { Get-OpencodeModelId '' | Out-Null } catch { $threw = $true }
+Assert-Eq 'an empty model throws rather than yielding a bare prefix' $true $threw
+
+$threw = $false
+try { Get-OpencodeModelId $null | Out-Null } catch { $threw = $true }
+Assert-Eq 'a null model throws rather than yielding a bare prefix' $true $threw
+
+$threw = $false
+try { Get-OpencodeModelId '   ' | Out-Null } catch { $threw = $true }
+Assert-Eq 'a whitespace-only model throws rather than yielding a bare prefix' $true $threw
+
+# The default provider id is only correct while it matches the installed
+# config, and nothing else in this repository ties the two together. A rename
+# in the JSON would leave every proxied run naming a provider opencode has
+# never heard of -- which fails before a single request is sent, so the gateway
+# looks fine and the model looks wrong.
+$proxied = Get-Content "$PSScriptRoot/../kube/opencode/opencode.proxied.json" -Raw |
+           ConvertFrom-Json
+$configuredProvider = ($proxied.provider.PSObject.Properties | Select-Object -First 1).Name
+$configuredModel    = ($proxied.provider.$configuredProvider.models.PSObject.Properties |
+                       Select-Object -First 1).Name
+
+Assert-Eq 'the default provider id is the one the proxied config declares' `
+    "$configuredProvider/$configuredModel" (Get-OpencodeModelId $configuredModel)
+
+# --- Get-OpenHandsEnvNames -------------------------------------------------
+# The cross-component coupling that had already gone wrong: the launcher
+# forwarded three variables under a comment claiming to list everything
+# run-openhands.sh reads, and CRANOPENER_LLM_BASE_URL -- a real operator knob,
+# used by tests/integration/openhands-wire.sh -- was not one of them. An
+# operator who set it had it dropped and got the pod default with no
+# diagnostic. Nothing but this test ties the two files together.
+
+$oh = Get-OpenHandsEnvNames
+
+# Read out of the adapter rather than retyped here, so a knob added there
+# cannot silently go unclassified. The pattern is bash's `${NAME:-default}`,
+# which is the only form the adapter uses to read its environment; a new name
+# in any other form would be missed, and a new *internal* variable given a
+# default would land here and have to be classified deliberately. Both are the
+# intended failure -- this file is the place that decision gets made.
+$adapterSrc = Get-Content "$PSScriptRoot/../scripts/run-openhands.sh" -Raw
+$adapterReads = [regex]::Matches($adapterSrc, '\$\{([A-Z][A-Z0-9_]*):-') |
+                ForEach-Object { $_.Groups[1].Value } |
+                Sort-Object -Unique
+
+Assert-Eq 'the adapter reads some environment variables to classify' `
+    $true ($adapterReads.Count -gt 0)
+
+$declared = @($oh.Forward) + @($oh.InImage)
+
+Assert-Eq 'no variable is both forwarded and in-image' `
+    0 (@($oh.Forward | Where-Object { $oh.InImage -contains $_ }).Count)
+
+$unclassified = @($adapterReads | Where-Object { $declared -notcontains $_ })
+Assert-Eq "every variable run-openhands.sh reads is classified (unclassified: $($unclassified -join ', '))" `
+    0 $unclassified.Count
+
+# The other direction. A name left in either list after the adapter stopped
+# reading it is a forwarded variable that does nothing, which is exactly the
+# kind of thing that survives because it looks deliberate.
+$phantom = @($declared | Where-Object { $adapterReads -notcontains $_ })
+Assert-Eq "nothing is declared that the adapter does not read (phantom: $($phantom -join ', '))" `
+    0 $phantom.Count
+
+# The specific regression, named rather than left to the set arithmetic above.
+Assert-Eq 'CRANOPENER_LLM_BASE_URL is forwarded' `
+    $true ($oh.Forward -contains 'CRANOPENER_LLM_BASE_URL')
+
+Assert-Eq 'the credential is forwarded' `
+    $true ($oh.Forward -contains 'CRANOPENER_LLM_API_KEY')
+
+# Both bounds on an unattended run. Dropping either leaves the SDK's own 500
+# completions as the only limit, against a gateway whose spend cap is inert.
+Assert-Eq 'the iteration cap is forwarded' `
+    $true ($oh.Forward -contains 'CRANOPENER_MAX_ITERATIONS')
+
+Assert-Eq 'the wall-clock bound is forwarded' `
+    $true ($oh.Forward -contains 'CRANOPENER_TIMEOUT_SECONDS')
+
+# Container-side paths. A Windows value for either names nothing the container
+# can open, so forwarding one could only break a run that worked.
+Assert-Eq 'the workspace path is not forwarded' `
+    $true ($oh.InImage -contains 'OPENHANDS_WORK_DIR')
+
+Assert-Eq 'the SDK interpreter path is not forwarded' `
+    $true ($oh.InImage -contains 'CRANOPENER_OPENHANDS_PYTHON')
+
+# The launcher must forward the list rather than a copy of it. Retyped names in
+# cranopener.ps1 would drift from this function the first time one changed.
+$launcherText = Get-Content "$PSScriptRoot/../scripts/cranopener.ps1" -Raw
+Assert-Eq 'the launcher forwards the declared list rather than a literal one' `
+    $true ($launcherText -match '\(Get-OpenHandsEnvNames\)\.Forward')
+
+# --- Get-OpenHandsTaskObjection --------------------------------------------
+# Every .EXAMPLE in cranopener.ps1 used to reach for opencode's `run` verb, and
+# the OpenHands path has no verb: the adapter does TASK="$*", so `run` becomes
+# the first word of the prompt. The run then proceeds, spends its whole
+# iteration budget against an instruction nobody wrote, and reports success --
+# which at a monthly-visit site costs a month and the tokens both.
+
+Assert-Eq 'a plain task is accepted' `
+    $null (Get-OpenHandsTaskObjection -Remaining @('fix the failing test') -Model 'provider-a/m')
+
+Assert-Eq 'several plain words are accepted' `
+    $null (Get-OpenHandsTaskObjection -Remaining @('fix', 'the', 'test') -Model 'provider-a/m')
+
+Assert-Eq 'no arguments at all is objected to' `
+    $true ((Get-OpenHandsTaskObjection -Remaining @() -Model 'provider-a/m') -match 'needs a task')
+
+Assert-Eq 'a null argument list is objected to' `
+    $true ((Get-OpenHandsTaskObjection -Remaining $null -Model 'provider-a/m') -match 'needs a task')
+
+# The finding itself.
+$verbObjection = Get-OpenHandsTaskObjection -Remaining @('run', 'fix the thing') -Model 'provider-a/m'
+Assert-Eq 'a leading run verb is objected to' `
+    $true ($null -ne $verbObjection)
+
+Assert-Eq 'the objection says what is wrong with it' `
+    $true ($verbObjection -match "no 'run' verb")
+
+Assert-Eq 'the objection shows the corrected form' `
+    $true ($verbObjection -match 'cranopener -Model provider-a/m "fix the failing test"')
+
+Assert-Eq 'the verb alone, with no task after it, is objected to' `
+    $true ($null -ne (Get-OpenHandsTaskObjection -Remaining @('run') -Model 'provider-a/m'))
+
+# Muscle memory does not respect case, and neither does the shell's history.
+Assert-Eq 'the verb check is case-insensitive' `
+    $true ($null -ne (Get-OpenHandsTaskObjection -Remaining @('Run', 'fix it') -Model 'provider-a/m'))
+
+# The two cases that must NOT be refused, because refusing them would make the
+# check worse than the bug: a task that happens to begin with the word run, and
+# a word that merely starts with it.
+Assert-Eq 'a quoted task beginning with the word run is accepted' `
+    $null (Get-OpenHandsTaskObjection -Remaining @('run the migration and report') -Model 'provider-a/m')
+
+Assert-Eq 'a longer word sharing the prefix is not the verb' `
+    $null (Get-OpenHandsTaskObjection -Remaining @('runbook', 'the deploy') -Model 'provider-a/m')
+
+# The message is what the operator acts on, so it has to name their model.
+Assert-Eq 'the objection names the model that caused it' `
+    $true ((Get-OpenHandsTaskObjection -Remaining @() -Model 'provider-a/some-model') -match 'provider-a/some-model')
+
+# The launcher must ask this function rather than re-implementing the checks.
+Assert-Eq 'the launcher asks for the objection rather than duplicating it' `
+    $true ($launcherText -match 'Get-OpenHandsTaskObjection')
+
 Write-Host ''
 Write-Host "test-launcher.ps1: $script:Run run, $script:Failed failed"
 if ($script:Failed -gt 0) { exit 1 }

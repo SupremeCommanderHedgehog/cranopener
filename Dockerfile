@@ -156,14 +156,108 @@ RUN set -eux; \
     rm -rf /var/lib/apt/lists/*; \
     R --version
 
+# --- agent harnesses ---
+# Two harnesses, divided by what the provider will accept. opencode (installed
+# above) drives every provider that supports native tool calling. Provider A
+# refuses the `tools` parameter entirely, so it needs a harness that renders
+# tools into the prompt and parses them back out itself — that is openhands.
+# aider is the fallback for the case where openhands parses the replies but
+# derails; it has to already be on the machine when that is discovered, because
+# the endpoint is a monthly trip away and behind a proxy with its own CA bundle.
+#
+# `uv tool install` rather than `pip install`: Debian trixie marks its Python
+# externally-managed (PEP 668), so a system-wide pip install refuses to run at
+# all, and each tool gets its own resolution rather than fighting the other one
+# over litellm's version range.
+#
+# UV_TOOL_DIR/UV_TOOL_BIN_DIR are exported inside this RUN rather than set as
+# ENV. As ENV they would persist, and a `uv tool install` by the unprivileged
+# runtime user would then try to write into root-owned /usr/local and fail —
+# the same reasoning as CARGO_HOME in the Rust block above.
+#
+# The package is `openhands`. `openhands-ai` is the retired V0 monolith and
+# provides no executables at all: `uv tool install` fails with "No executables
+# are provided by package", which is the cheapest possible way to learn that,
+# and only if the version stays pinned to something that still ships them.
+#
+# aider gets its own interpreter, and this is not a preference. aider-chat
+# resolves numpy 1.26.4, which publishes no wheel for the Python 3.13 that
+# trixie ships, so uv falls back to building it from source and the build dies
+# on `Cannot compile Python.h`. Installing python3-dev would only let it get
+# further into compiling a numpy that predates 3.13's C API. A uv-managed 3.12
+# has a wheel for everything in that resolution and compiles nothing.
+#
+# UV_PYTHON_INSTALL_DIR must land outside /root: the tool venv points at that
+# interpreter forever, and root's home is 0700, so a default install would
+# produce an aider that only root can run.
+#
+# openhands-python is a symlink to the tool venv's interpreter. The settings
+# generator must run under the interpreter that has the SDK installed — it
+# builds a real openhands.sdk.Agent, and the system python3 has never heard of
+# it. uv's venv layout is an implementation detail of a tool that has already
+# renamed things once, so the path is pinned behind a name of ours and the
+# import is asserted at build time, where it costs nothing to find out.
+ARG OPENHANDS_VERSION
+ARG AIDER_VERSION
+ENV PATH=/usr/local/uvtools/bin:$PATH
+RUN set -eux; \
+    test -n "${OPENHANDS_VERSION}"; \
+    test -n "${AIDER_VERSION}"; \
+    export UV_TOOL_BIN_DIR=/usr/local/uvtools/bin; \
+    export UV_TOOL_DIR=/usr/local/uvtools/tools; \
+    export UV_PYTHON_INSTALL_DIR=/usr/local/uvpython; \
+    uv tool install "openhands==${OPENHANDS_VERSION}"; \
+    uv python install 3.12; \
+    uv tool install --python 3.12 "aider-chat==${AIDER_VERSION}"; \
+    printf '%s\n' '#!/bin/sh' \
+      'exec /usr/local/uvtools/tools/openhands/bin/python "$@"' \
+      > /usr/local/bin/openhands-python; \
+    chmod 0755 /usr/local/bin/openhands-python; \
+    chmod -R a+rX /usr/local/uvtools /usr/local/uvpython; \
+    openhands --help >/dev/null; \
+    aider --version; \
+    openhands-python -c 'from openhands.sdk import LLM, Agent'
+
+# --- no public-skills fetch ---
+# The CLI hardcodes `load_public_skills=True` in
+# `AgentStore._build_agent_context()`, and the SDK honours it by cloning
+# github.com/OpenHands/extensions into ~/.openhands/cache/skills before the
+# agent starts -- on every run, and on a warm cache it fetches, checks out and
+# resets --hard rather than skipping. The target site is behind a corporate
+# proxy and an unexplained outbound git call per agent run is not acceptable
+# there; unreachable, it costs a DNS timeout per run and a logged error.
+#
+# Patched in the installed package because nothing softer works:
+# `_apply_runtime_config()` replaces `agent_context` unconditionally, so the
+# flag in the generated agent_settings.json is discarded before it is read, and
+# no environment variable turns it off (EXTENSIONS_REF only picks the branch).
+# The SDK's own field default is False; this restores it. `load_user_skills`
+# stays True -- local directories, no socket.
+#
+# The script refuses to run if the line it patches is not exactly where it
+# expects, and then proves the imported module reports the new value. That
+# guard is the point of the whole block: an upstream rename or reformat would
+# otherwise turn this into a silent no-op and the image would quietly go back
+# to calling GitHub on every run.
+COPY scripts/disable-public-skills.sh /tmp/disable-public-skills.sh
+RUN set -eux; \
+    bash /tmp/disable-public-skills.sh; \
+    rm /tmp/disable-public-skills.sh
+
 # --- config defaults and entrypoint (last: changes most often) ---
 # COPY preserves source file modes; the build context is synced from a
 # Windows host over tar/ssh and can land with owner-only (600/700) perms,
 # which the non-root user below can't read. Normalize to world-readable.
 COPY config/ /etc/opencode/
 RUN chmod -R a+rX /etc/opencode
-COPY scripts/seed-config.sh scripts/entrypoint.sh /usr/local/bin/
-RUN chmod 0755 /usr/local/bin/seed-config.sh /usr/local/bin/entrypoint.sh
+COPY scripts/seed-config.sh scripts/entrypoint.sh scripts/run-openhands.sh /usr/local/bin/
+# The settings generator is data to the adapter, not a command: it is never on
+# PATH because it must never be run by the system python3, which lacks the SDK
+# and would fail with an ImportError that reads like a broken image.
+COPY scripts/make-openhands-settings.py /usr/local/lib/cranopener/
+RUN chmod 0755 /usr/local/bin/seed-config.sh /usr/local/bin/entrypoint.sh \
+        /usr/local/bin/run-openhands.sh; \
+    chmod -R a+rX /usr/local/lib/cranopener
 
 USER opencode
 WORKDIR /workspace
@@ -177,6 +271,8 @@ ARG GO_VERSION
 ARG JULIA_VERSION
 ARG NODE_MAJOR
 ARG DOTNET_CHANNEL
+ARG OPENHANDS_VERSION
+ARG AIDER_VERSION
 LABEL org.opencontainers.image.title="cranopener" \
       org.opencontainers.image.description="opencode with a polyglot toolchain" \
       org.opencontainers.image.source="https://github.com/SupremeCommanderHedgehog/cranopener" \
@@ -187,4 +283,6 @@ LABEL org.opencontainers.image.title="cranopener" \
       dev.cranopener.go.version="${GO_VERSION}" \
       dev.cranopener.julia.version="${JULIA_VERSION}" \
       dev.cranopener.node.major="${NODE_MAJOR}" \
-      dev.cranopener.dotnet.channel="${DOTNET_CHANNEL}"
+      dev.cranopener.dotnet.channel="${DOTNET_CHANNEL}" \
+      dev.cranopener.openhands.version="${OPENHANDS_VERSION}" \
+      dev.cranopener.aider.version="${AIDER_VERSION}"
