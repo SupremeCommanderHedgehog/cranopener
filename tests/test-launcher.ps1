@@ -441,6 +441,17 @@ Assert-Eq 'a bare namespace with no model is still matched' `
 Assert-Eq 'the prompt-mode set is overridable for testing' `
     'openhands' (Get-HarnessForModel 'provider-z/m' -PromptModeNamespaces @('provider-z'))
 
+# The two outcomes are not equally safe: falling through to opencode is the
+# failure this function exists to prevent. A stray leading space must not be
+# what causes it.
+Assert-Eq 'surrounding whitespace does not route to the wrong harness' `
+    'openhands' (Get-HarnessForModel '  provider-a/some-model  ')
+
+# An override that merely added to the default would pass every assertion
+# above while silently keeping provider-a in prompt mode.
+Assert-Eq 'the override replaces the default rather than adding to it' `
+    'opencode' (Get-HarnessForModel 'provider-a/m' -PromptModeNamespaces @('provider-z'))
+
 Write-Host ''
 Write-Host "test-launcher.ps1: $script:Run run, $script:Failed failed"
 if ($script:Failed -gt 0) { exit 1 }

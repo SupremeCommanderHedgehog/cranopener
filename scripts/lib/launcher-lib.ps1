@@ -350,6 +350,12 @@ function Get-HarnessForModel {
 
     if ([string]::IsNullOrWhiteSpace($Model)) { return 'opencode' }
 
+    # Trimmed before matching because this function's two outcomes are not
+    # equally safe. Falling through to opencode is the failure it exists to
+    # prevent, so a stray leading space -- from a quoted argument or a copied
+    # model id -- must not be the thing that causes it.
+    $Model = $Model.Trim()
+
     foreach ($ns in $PromptModeNamespaces) {
         if ($Model.StartsWith("$ns/", [StringComparison]::OrdinalIgnoreCase)) {
             return 'openhands'
