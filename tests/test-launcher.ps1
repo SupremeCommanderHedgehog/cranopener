@@ -179,6 +179,30 @@ Assert-Eq 'multiple names keep their given order' `
     "      env:`n        - name: A`n          value: '1'`n        - name: B`n          value: '2'" `
     (New-GatewayEnvBlock -Names @('A', 'B') -Values @{ 'A' = '1'; 'B' = '2' } -Indent 6)
 
+# A newline means the input is already wrong -- none of the variables this
+# function carries (API keys, proxy URLs, CA bundle paths) has a legitimate
+# reason to contain one. Escaping cannot make a line break part of a
+# single-quoted flow scalar without altering it: YAML folds any line break
+# inside one to a space, so accepting it would silently turn a bad
+# credential into a *different* bad credential instead of failing loudly --
+# exactly the "silently wrong value" failure mode this function exists to
+# avoid. Reject it instead of accommodating it.
+$threw = $false
+try {
+    New-GatewayEnvBlock -Names @('K') -Values @{ 'K' = "line1`nline2" } -Indent 6 | Out-Null
+} catch { $threw = $true }
+Assert-Eq 'a value containing an embedded line break throws' $true $threw
+
+# The realistic trigger: `$env:KEY = Get-Content key.txt` keeps the file's
+# trailing newline. That must fail here, loudly, not three layers away as a
+# provider authentication error that points at the credential instead of
+# the launcher.
+$threw = $false
+try {
+    New-GatewayEnvBlock -Names @('K') -Values @{ 'K' = "secret`n" } -Indent 6 | Out-Null
+} catch { $threw = $true }
+Assert-Eq 'a trailing newline throws' $true $threw
+
 Write-Host ''
 Write-Host "test-launcher.ps1: $script:Run run, $script:Failed failed"
 if ($script:Failed -gt 0) { exit 1 }

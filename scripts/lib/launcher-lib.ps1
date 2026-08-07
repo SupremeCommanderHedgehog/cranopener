@@ -136,6 +136,23 @@ function New-GatewayEnvBlock {
       escape except '' for a literal quote, so this is total: a value
       containing ':', '#', '!', or a leading digit cannot alter the parse or
       the inferred type.
+
+      A carriage return or line feed is rejected rather than escaped. This is
+      deliberate, not an oversight: quoting cannot make a line break part of
+      a single-quoted flow scalar without changing it, because YAML folds any
+      line break inside one to a space -- so "escaping" a newline would
+      silently substitute a different, wrong value rather than preserve the
+      original, defeating the whole point of this function. None of the
+      variables this function carries (provider API keys, proxy URLs, CA
+      bundle paths) has a legitimate reason to span multiple lines, so a
+      newline means the input is already wrong -- most commonly from
+      `$env:KEY = Get-Content key.txt`, which keeps the file's trailing
+      newline. Failing loudly here, with the offending variable named, is far
+      cheaper than the alternative: a provider authentication failure that
+      points at the credential instead of the launcher. Do not "fix" this by
+      adding block-scalar (|/>) support -- these values must stay
+      single-line, so rejection is the correct answer forever, not a
+      shortcut to revisit later.
     #>
     param(
         [Parameter(Mandatory)][string[]]$Names,
@@ -150,6 +167,9 @@ function New-GatewayEnvBlock {
         $raw = ''
         if ($Values.ContainsKey($name) -and $null -ne $Values[$name]) {
             $raw = [string]$Values[$name]
+        }
+        if ($raw -match "[`r`n]") {
+            throw "New-GatewayEnvBlock: value for '$name' contains a line break (CR or LF). Provider credentials and URLs must be single-line; check for a trailing newline from e.g. Get-Content."
         }
         $escaped = $raw -replace "'", "''"
         $lines += "${pad}  - name: $name"
