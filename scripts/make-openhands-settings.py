@@ -182,9 +182,38 @@ def main(argv=None):
         # parent like /tmp, taking the whole generation with it. The 0600 on
         # the file below is what actually protects the key.
         os.makedirs(parent, mode=0o700, exist_ok=True)
-    with open(out, "w", encoding="utf-8") as fh:
+    # The payload carries the API key in the clear -- that is what
+    # `expose_secrets` above is for -- so the file must not exist, at any
+    # instant, with any byte of it in it, readable by another uid.
+    #
+    # `open(out, "w")` creates at the process umask, 0022 on a stock image, and
+    # narrowing it afterwards leaves the key world-readable for the length of
+    # the write plus the chmod. Worse, a chmod that never runs -- an exception
+    # in between, a full disk, a SIGTERM -- leaves it that way permanently, and
+    # nothing downstream would ever notice. The module already declines to put
+    # the key on /proc/<pid>/cmdline; leaving it in a 0644 file is the same
+    # exposure with a longer lifetime.
+    #
+    # The fchmod is not redundant with O_CREAT's mode. O_CREAT ignores the mode
+    # argument entirely when the file already exists, which is the ordinary
+    # case here -- this is regenerated on every run -- so on the second run
+    # O_CREAT would do nothing and a pre-existing 0644 file would keep its
+    # mode. fchmod is what narrows it, and it runs after O_TRUNC has emptied
+    # the file and before the first byte of the payload is written: at every
+    # instant the file has contents, it is 0600.
+    fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        fh = os.fdopen(fd, "w", encoding="utf-8")
+    except BaseException:
+        # Only reached while `fd` is still the only reference to the
+        # descriptor. Once fdopen has taken it, the `with` below owns it and
+        # closing here as well would close a descriptor something else may have
+        # been handed in the meantime.
+        os.close(fd)
+        raise
+    with fh:
         fh.write(payload)
-    os.chmod(out, 0o600)
     print("wrote %s (%d bytes, native_tool_calling=%r)"
           % (out, len(payload), reloaded.llm.native_tool_calling),
           file=sys.stderr)
