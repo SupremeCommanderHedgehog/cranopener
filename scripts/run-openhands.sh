@@ -56,10 +56,15 @@
 #   0  the run completed with no conversation error
 #   2  usage or configuration error
 #   3  the settings file is missing, unloadable, or in native tool-calling mode
-#   4  the conversation reported an error (regardless of the harness's status)
+#   4  the run failed at the conversation: it reported an error (regardless of
+#      the harness's status), or it exited cleanly having emitted nothing
 #   5  a bound was reached -- the iteration cap or the wall clock -- and the
 #      run was stopped
 #   *  whatever the harness exited with, when it is non-zero
+#
+# Several of those conditions hold at once in ordinary failures, so which one
+# is reported is decided by the order of the verdict block in section 3, and
+# that order is part of this script's contract. See the comment there.
 #
 # Nothing here needs the container-engine socket, a spawned sandbox container,
 # or any network destination other than the configured base URL. The CLI runs
@@ -300,6 +305,23 @@ harness_rc=$?
 HARNESS_PID=""
 
 # --- 3. a verdict that means what it says ----------------------------------
+#
+# THE ORDER OF THIS BLOCK IS THE CONTRACT, not an artefact of the sequence the
+# checks happened to be written in. Several of these conditions hold at once in
+# ordinary failures -- a run that errors on every turn also burns through the
+# cap; a harness that blackholes emits no events AND is killed by the wall
+# clock -- and whichever is tested first is the only thing the operator is
+# told. So they are tested most specific first, and a condition that did not
+# win is printed underneath the one that did rather than dropped.
+#
+# What getting this wrong costs is not a wrong exit status, which nothing
+# reads. It is a wrong instruction, at a site reachable about once a month. The
+# order this block used to have told a run that errored on every turn and then
+# hit the cap to "raise the cap deliberately, or shorten the task" -- which
+# invites spending more money on a configuration that cannot work -- and told a
+# harness that blackholed and was killed by `timeout` to check its model
+# prefix, which was not wrong with it. tests/test-run-openhands-verdict.sh
+# drives every one of these and pins the order.
 stderr_tail() {
   if [ -s "$HARNESS_STDERR" ]; then
     echo "--- harness stderr (last 20 lines) ---" >&2
@@ -307,8 +329,35 @@ stderr_tail() {
   fi
 }
 
+# Printed under whichever verdict won. The cap is the one that has to survive
+# losing: an errored run that also hit the cap is an errored run, but without
+# this the event count in front of the operator is unexplained and the run
+# looks like it simply stopped.
+also_capped() {
+  [ "$capped" = "1" ] || return 0
+  echo "  This run also stopped at the iteration cap," >&2
+  echo "  CRANOPENER_MAX_ITERATIONS=$MAX_ITERATIONS, after $events stream events." >&2
+  echo "  That is context and not the cause: raising the cap buys more of the" >&2
+  echo "  same failure." >&2
+}
+
+# 1. Conversation errors, ahead of everything else. Whatever else was also true
+#    of the run is either a consequence of the errors or a coincidence, and
+#    naming it instead aims the next move at the wrong thing.
+if [ "$errors" -gt 0 ]; then
+  # The harness's own status is printed rather than used. It is routinely 0
+  # here, which is the whole reason this script exists.
+  echo "run-openhands.sh: $errors conversation error(s); the harness itself exited $harness_rc." >&2
+  also_capped
+  stderr_tail
+  exit 4
+fi
+
+# 2. The iteration cap. This run killed the harness on purpose to enforce it,
+#    so harness_rc from here down is the signal we sent rather than anything
+#    the run did -- which is why both status tests sit underneath this one.
 if [ "$capped" = "1" ]; then
-  echo "run-openhands.sh: stopped at the iteration cap." >&2
+  echo "run-openhands.sh: stopped at the iteration cap, with no conversation errors." >&2
   echo "  CRANOPENER_MAX_ITERATIONS=$MAX_ITERATIONS, reached after $events stream" >&2
   echo "  events ($actions agent action(s)). Nothing else would have stopped this:" >&2
   echo "  the CLI never passes max_iteration_per_run, so the SDK's own limit is" >&2
@@ -318,37 +367,49 @@ if [ "$capped" = "1" ]; then
   exit 5
 fi
 
-if [ "$errors" -gt 0 ]; then
-  # The harness's own status is printed rather than used. It is routinely 0
-  # here, which is the whole reason this script exists.
-  echo "run-openhands.sh: $errors conversation error(s); the harness itself exited $harness_rc." >&2
-  stderr_tail
-  exit 4
-fi
-
-if [ "$events" -eq 0 ]; then
-  # Trap 1, in the shape it actually takes: a model prefix litellm does not
-  # recognise makes the client give up before opening a socket, and the CLI
-  # exits 0 having sent nothing. It looks exactly like a clean run that had
-  # nothing to say, which is the most expensive way to be wrong here.
-  echo "run-openhands.sh: the harness emitted no events at all -- it did not get" >&2
-  echo "  as far as a conversation. Check the model prefix and that" >&2
-  echo "  $BASE_URL is the endpoint you meant." >&2
-  stderr_tail
-  exit 4
-fi
-
+# 3. The wall clock, ahead of the zero-events check below rather than after it.
+#    A harness that blackholes -- a dropped proxy connection, a DNS timeout on
+#    the LLM path -- emits nothing and is then killed by `timeout`, and the
+#    zero-events message would send the reader to the model prefix and the base
+#    URL, neither of which is wrong with it. 124 is `timeout`'s own status for
+#    "the bound fired", so this is the one condition that reports itself.
 if [ "$harness_rc" -eq 124 ]; then
   echo "run-openhands.sh: stopped at the wall-clock bound," >&2
   echo "  CRANOPENER_TIMEOUT_SECONDS=$TIMEOUT_SECONDS, after $events stream events." >&2
+  if [ "$events" -eq 0 ]; then
+    echo "  It emitted nothing at all before the bound fired, so it never reached" >&2
+    echo "  a conversation: something on the path to $BASE_URL is taking the" >&2
+    echo "  connection and not answering. That is a different fault from a" >&2
+    echo "  harness that exits 0 having sent nothing -- see exit 4." >&2
+  fi
   stderr_tail
   exit 5
 fi
 
+# 4. A harness that failed and said so, also ahead of the zero-events check and
+#    for the same reason: a CLI that died during startup -- an unreadable
+#    settings file, an import error out of a half-built image -- emits no
+#    events either, and its own status with its stderr is a better lead than a
+#    guess about the model prefix. The zero-events diagnosis below is
+#    specifically about a harness that exited CLEANLY having sent nothing.
 if [ "$harness_rc" -ne 0 ]; then
   echo "run-openhands.sh: harness exited $harness_rc after $events stream events" >&2
   stderr_tail
   exit "$harness_rc"
+fi
+
+# 5. Zero events from a harness that exited 0 -- what is left once every louder
+#    failure above has been ruled out, and trap 1 in the shape it actually
+#    takes: a model prefix litellm does not recognise makes the client give up
+#    before opening a socket, and the CLI exits 0 having sent nothing. It looks
+#    exactly like a clean run that had nothing to say, which is the most
+#    expensive way to be wrong here.
+if [ "$events" -eq 0 ]; then
+  echo "run-openhands.sh: the harness exited 0 having emitted no events at all --" >&2
+  echo "  it did not get as far as a conversation. Check the model prefix and" >&2
+  echo "  that $BASE_URL is the endpoint you meant." >&2
+  stderr_tail
+  exit 4
 fi
 
 echo "run-openhands.sh: completed: $events stream events, $actions agent action(s), no conversation errors" >&2
