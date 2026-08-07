@@ -145,6 +145,40 @@ $threw = $false
 try { ConvertTo-VmPath 'C:foo' | Out-Null } catch { $threw = $true }
 Assert-Eq 'a drive-relative path is rejected rather than mistranslated' $true $threw
 
+# --- New-GatewayEnvBlock ---------------------------------------------------
+# Credentials reach the gateway as a YAML env block built in memory and piped
+# to `podman kube play -`. Every value is single-quoted: YAML single-quoted
+# scalars take no escapes except '' for a literal quote, which makes the
+# quoting total. Without it a key containing ':' splits the scalar and a key
+# starting '!' is read as a type tag.
+
+Assert-Eq 'emits an env block at the requested indent' `
+    "      env:`n        - name: A_KEY`n          value: 'plain'" `
+    (New-GatewayEnvBlock -Names @('A_KEY') -Values @{ 'A_KEY' = 'plain' } -Indent 6)
+
+Assert-Eq 'a value containing a colon stays a single scalar' `
+    "      env:`n        - name: P`n          value: 'http://h:8080'" `
+    (New-GatewayEnvBlock -Names @('P') -Values @{ 'P' = 'http://h:8080' } -Indent 6)
+
+Assert-Eq 'a single quote is doubled' `
+    "      env:`n        - name: K`n          value: 'it''s'" `
+    (New-GatewayEnvBlock -Names @('K') -Values @{ 'K' = "it's" } -Indent 6)
+
+Assert-Eq 'a leading exclamation mark is not read as a tag' `
+    "      env:`n        - name: K`n          value: '!secret'" `
+    (New-GatewayEnvBlock -Names @('K') -Values @{ 'K' = '!secret' } -Indent 6)
+
+# Absent variables are emitted empty rather than omitted, matching compose's
+# ${VAR:-}. A missing key should fail at the provider with an auth error, not
+# at startup with a malformed manifest.
+Assert-Eq 'a missing value becomes an empty string' `
+    "      env:`n        - name: K`n          value: ''" `
+    (New-GatewayEnvBlock -Names @('K') -Values @{} -Indent 6)
+
+Assert-Eq 'multiple names keep their given order' `
+    "      env:`n        - name: A`n          value: '1'`n        - name: B`n          value: '2'" `
+    (New-GatewayEnvBlock -Names @('A', 'B') -Values @{ 'A' = '1'; 'B' = '2' } -Indent 6)
+
 Write-Host ''
 Write-Host "test-launcher.ps1: $script:Run run, $script:Failed failed"
 if ($script:Failed -gt 0) { exit 1 }

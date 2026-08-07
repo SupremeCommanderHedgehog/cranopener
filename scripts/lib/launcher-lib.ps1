@@ -120,3 +120,41 @@ function ConvertTo-VmPath {
 
     return "/mnt/$drive$rest"
 }
+
+function New-GatewayEnvBlock {
+    <#
+    .SYNOPSIS
+      Render a Kubernetes env block from a set of variable names and values.
+
+    .DESCRIPTION
+      Credentials must not be written to disk, and `podman kube play` has no
+      --env flag, so the launcher builds this block in memory and pipes the
+      manifest to `podman kube play -`. stdin is also preferable to argv,
+      which is visible in process listings.
+
+      Every value is single-quoted. YAML single-quoted scalars honour no
+      escape except '' for a literal quote, so this is total: a value
+      containing ':', '#', '!', or a leading digit cannot alter the parse or
+      the inferred type.
+    #>
+    param(
+        [Parameter(Mandatory)][string[]]$Names,
+        [Parameter(Mandatory)][hashtable]$Values,
+        [int]$Indent = 6
+    )
+
+    $pad = ' ' * $Indent
+    $lines = @("${pad}env:")
+
+    foreach ($name in $Names) {
+        $raw = ''
+        if ($Values.ContainsKey($name) -and $null -ne $Values[$name]) {
+            $raw = [string]$Values[$name]
+        }
+        $escaped = $raw -replace "'", "''"
+        $lines += "${pad}  - name: $name"
+        $lines += "${pad}    value: '$escaped'"
+    }
+
+    return ($lines -join "`n")
+}
