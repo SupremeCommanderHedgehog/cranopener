@@ -157,7 +157,8 @@ for _ in $(seq 1 50); do
   [ -s "$PORT_FILE" ] && break
   sleep 0.1
 done
-export PROBE_BASE_URL="http://127.0.0.1:$(cat "$PORT_FILE")/v1"
+PORT="$(cat "$PORT_FILE")"
+export PROBE_BASE_URL="http://127.0.0.1:$PORT/v1"
 
 PROBE_CONTEXT_LADDER='4000' bash "$PROBE" "$OUT3" >/dev/null 2>&1
 
@@ -182,7 +183,8 @@ for _ in $(seq 1 50); do
   [ -s "$PORT_FILE" ] && break
   sleep 0.1
 done
-export PROBE_BASE_URL="http://127.0.0.1:$(cat "$PORT_FILE")/v1"
+PORT="$(cat "$PORT_FILE")"
+export PROBE_BASE_URL="http://127.0.0.1:$PORT/v1"
 PROBE_CONTEXT_LADDER='4000' bash "$PROBE" "$OUT4" >/dev/null 2>&1
 
 assert_ok 'an accepted body triggers no retry' \
@@ -203,7 +205,8 @@ for _ in $(seq 1 50); do
   [ -s "$PORT_FILE" ] && break
   sleep 0.1
 done
-export PROBE_BASE_URL="http://127.0.0.1:$(cat "$PORT_FILE")/v1"
+PORT="$(cat "$PORT_FILE")"
+export PROBE_BASE_URL="http://127.0.0.1:$PORT/v1"
 
 # ~8000 tokens is 32000 characters of filler, over the hard limit; ~2000 is
 # 8000 characters, under it but over the empty-body threshold.
