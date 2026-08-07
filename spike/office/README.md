@@ -60,6 +60,18 @@ and a request rejected for size is rejected before generation, so it is billed
 for nothing. `spike/RESULTS.md`, which is local and gitignored, holds the table
 this number turns into an answer.
 
+This is the step the August run lost. All three rungs came back `400 Invalid
+JSON in request body: EOF while parsing a value at line 1 column 0` — the
+endpoint complaining about a body it never received — while both smaller
+requests, the only two under 1 KB in the whole run, succeeded. The mechanism is
+still unknown: curl sends no `Expect: 100-continue` at those sizes, and nothing
+captured recorded whether the bytes ever left the machine. So a rejection of
+that exact shape now costs one retry over HTTP/1.1, because every failure of it
+so far was HTTP/2 through a CONNECT tunnel. If the retry succeeds, the window
+is at least that rung and large requests need `--http1.1` to get through. If it
+fails the same way, `size_upload` in the two meta files says which side of the
+wire lost the body.
+
 **4 — the multi-turn run.** Run by hand, in a scratch repository. Not "does it
 parse once" — does it reach turn ten and finish something.
 
@@ -70,6 +82,20 @@ the outcome: the request body, the raw response body, the response headers,
 curl's own stderr, and the transfer metadata including the TLS verification
 result. The body file is created before the request is made, so an empty file
 never has to be told apart from a missing one.
+
+The August run showed that this covered only half the wire. The response was
+captured completely and the request barely at all, so a step that failed on the
+way out left a captured 400 that read like a finding about the endpoint. Three
+things close that gap. `size_upload` records what curl actually put on the
+wire, next to `request_bytes` for what the probe meant to send — when those
+disagree, or when both are nonzero and the endpoint still reports an empty
+body, the answer is in the difference. The probe's own output is teed to
+`00-probe-log.txt`, because the account of a step that dies before curl runs is
+otherwise spoken only to a terminal in a building you are about to leave. And a
+request body that could not be built is never sent: there is no HTTP status for
+that step at all, only the generator's error in `<step>-generator-stderr.txt`,
+because a plausible status code answering a question nobody asked is worse than
+no answer.
 
 That is the point of the kit. A failed trip has to be diagnosable at a desk
 against captured bytes, because the next chance to look is a month away.
