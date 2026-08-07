@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Install the cranopener compose tree to ~/.cranopener.
+  Install the cranopener kube tree to ~/.cranopener.
 
 .DESCRIPTION
   Copies templates without ever overwriting local configuration. The
@@ -22,9 +22,14 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$source = Join-Path (Split-Path -Parent $PSScriptRoot) 'compose'
 
-if (-not (Test-Path $source)) { throw "missing compose templates at $source" }
+# ConvertTo-VmPath lives here. hostPath resolves inside the podman machine, so
+# the install directory has to be rewritten to its /mnt form.
+. (Join-Path $PSScriptRoot 'lib/launcher-lib.ps1')
+
+$source = Join-Path (Split-Path -Parent $PSScriptRoot) 'kube'
+
+if (-not (Test-Path $source)) { throw "missing kube templates at $source" }
 
 New-Item -ItemType Directory -Force -Path $Destination | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $Destination 'certs') | Out-Null
@@ -32,13 +37,14 @@ New-Item -ItemType Directory -Force -Path (Join-Path $Destination 'certs') | Out
 $copied = 0
 $skipped = 0
 $drifted = @()
+$gatewayCopied = $false
 
 foreach ($file in (Get-ChildItem -Path $source -Recurse -File -Force)) {
     $relative = $file.FullName.Substring($source.Length).TrimStart('\', '/')
     $target = Join-Path $Destination $relative
 
     # Never overwrite. The installed copies get edited -- model IDs in
-    # opencode.proxied.json, extra volumes in compose.yaml -- and clobbering
+    # opencode.proxied.json, extra mounts in gateway.yaml -- and clobbering
     # those on an upgrade would be a silent, expensive mistake.
     if (Test-Path $target) {
         # But silently skipping is its own trap: a fixed template would never
@@ -58,7 +64,32 @@ foreach ($file in (Get-ChildItem -Path $source -Recurse -File -Force)) {
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
     Copy-Item $file.FullName $target
     Write-Host "copy  $relative"
+    if ($relative -eq 'gateway.yaml') { $gatewayCopied = $true }
     $copied++
+}
+
+# gateway.yaml ships with a placeholder because hostPath needs a literal
+# absolute path and kube YAML has no interpolation. The value must be the path
+# the podman machine sees, not the Windows one: `podman run -v` translates
+# Windows paths but hostPath does not, and C:/x is looked up as /C:/x.
+#
+# Only ever rewrite a file this run copied. Rewriting an installed one would
+# undo local edits, which is the whole reason the never-overwrite rule exists.
+$gateway = Join-Path $Destination 'gateway.yaml'
+if ($gatewayCopied) {
+    $vmHome = ConvertTo-VmPath $Destination
+    $text = (Get-Content $gateway -Raw).Replace('__CRANOPENER_HOME__', $vmHome)
+    # -Raw in, WriteAllText out, explicit UTF8-no-BOM: the file's own LF
+    # endings pass through untouched. Reading into a string array and writing
+    # it back would re-join with CRLF, and the launcher's marker regex is
+    # anchored per line -- the gateway would then fail with "no
+    # __CRANOPENER_GATEWAY_ENV__ marker" while the marker sits plainly visible
+    # in the file. The launcher tolerates CRLF too; neither guard stands alone.
+    [System.IO.File]::WriteAllText($gateway, $text, (New-Object System.Text.UTF8Encoding $false))
+    Write-Host "      gateway.yaml hostPath -> $vmHome"
+} elseif ((Test-Path $gateway) -and ((Get-Content $gateway -Raw) -match '__CRANOPENER_HOME__')) {
+    Write-Host "WARN  gateway.yaml still contains __CRANOPENER_HOME__." -ForegroundColor Yellow
+    Write-Host "      The gateway cannot start until it is replaced with $(ConvertTo-VmPath $Destination)" -ForegroundColor Yellow
 }
 
 Write-Host ''
@@ -74,11 +105,46 @@ if ($drifted) {
         Write-Host "    diff `"$(Join-Path $source $d)`" `"$(Join-Path $Destination $d)`""
     }
 }
+
+# install.ps1 never overwrites, so an install predating the kube migration
+# keeps an opencode.proxied.json pointing at http://litellm:4000. Containers in
+# a pod share one network namespace, so that name no longer resolves at all --
+# and the failure surfaces at the first prompt of a session, looking like a
+# gateway outage rather than a stale file. Detect it here instead.
+$dead = @()
+foreach ($f in 'compose.yaml', 'compose.direct.yaml', '.env.example', '.env') {
+    if (Test-Path (Join-Path $Destination $f)) { $dead += $f }
+}
+$proxied = Join-Path $Destination 'opencode/opencode.proxied.json'
+$staleUrl = (Test-Path $proxied) -and ((Get-Content $proxied -Raw) -match 'litellm:4000')
+
+if ($dead -or $staleUrl) {
+    Write-Host ''
+    Write-Host 'This install predates the move to podman kube.' -ForegroundColor Red
+    if ($staleUrl) {
+        Write-Host '  * opencode.proxied.json still points at http://litellm:4000/v1.' -ForegroundColor Red
+        Write-Host '    Containers in a pod share one network namespace, so that name no'
+        Write-Host '    longer resolves. Change baseURL to http://localhost:4000/v1:'
+        Write-Host "      $proxied"
+    }
+    if ($dead) {
+        Write-Host '  * These files are no longer read and can be deleted:' -ForegroundColor Red
+        foreach ($f in $dead) { Write-Host "      $(Join-Path $Destination $f)" }
+    }
+    if ($dead -contains '.env' -or $dead -contains '.env.example') {
+        Write-Host '    Credentials now come from the environment, never a file. See step 2.'
+    }
+}
+
 Write-Host ''
 Write-Host 'Next steps:' -ForegroundColor Yellow
 Write-Host "  1. copy $Destination\litellm\config.example.yaml to config.yaml,"
 Write-Host '     and replace every PLACEHOLDER with real endpoints and model IDs'
-Write-Host "  2. copy $Destination\.env.example to .env and fill in credentials"
+Write-Host '  2. export credentials in your shell. They are read from the environment'
+Write-Host '     and are never written to a file:'
+Write-Host '       $env:PROVIDER_A_API_KEY, $env:PROVIDER_B_API_KEY, $env:PROVIDER_C_API_KEY'
+Write-Host '     For -Direct: $env:ANTHROPIC_API_KEY, $env:OPENAI_API_KEY'
+Write-Host '     Optional egress: $env:HTTP_PROXY, $env:HTTPS_PROXY, $env:NO_PROXY'
 Write-Host "  3. place a COMPLETE CA bundle at $Destination\certs\extra-roots.pem"
 Write-Host '     The gateway sets SSL_CERT_FILE to it, which REPLACES the default'
 Write-Host '     trust store rather than adding to it -- so this file must contain'
