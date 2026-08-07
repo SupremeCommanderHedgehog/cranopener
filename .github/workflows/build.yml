@@ -14,7 +14,7 @@ on:
     paths:
       - Dockerfile
       - config/**
-      - compose/**
+      - kube/**
       - scripts/**
       - tests/**
       - .github/workflows/**
@@ -22,7 +22,7 @@ on:
     paths:
       - Dockerfile
       - config/**
-      - compose/**
+      - kube/**
       - scripts/**
       - tests/**
       - .github/workflows/**

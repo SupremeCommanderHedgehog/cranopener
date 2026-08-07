@@ -32,7 +32,7 @@ litellm_settings:
 
   # WARNING: these two keys are NOT enforced by this stack.
   #
-  # LiteLLM tracks spend in a Postgres database, and compose.yaml provisions
+  # LiteLLM tracks spend in a Postgres database, and the gateway pod provisions
   # none. Without DATABASE_URL set and a database reachable, the values below
   # are inert -- an agent looping unattended against a metered endpoint will
   # run until it finishes or you stop it.
