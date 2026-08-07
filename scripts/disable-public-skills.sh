@@ -69,9 +69,31 @@ fi
 [ -f "$FILE" ] || fail "no such file: $FILE"
 
 # The method, not the file. A flag of the same name somewhere else in the file
-# is not this flag, and patching it would leave the real one set.
+# is not this flag, and patching it would leave the real one set -- which is the
+# entire reason the "exactly one occurrence" assertions below are worth
+# anything.
+#
+# Which means the END of the body has to be as reliable as the start. `^    def `
+# alone is not: it does not match `    async def `, so the day upstream makes
+# the next member async this "method body" runs on into every method after it.
+# That does not fail loudly. It fails by finding a load_public_skills=True that
+# belongs to some other method, counting exactly one of them, and patching it --
+# leaving _build_agent_context still cloning from github.com on every run, which
+# is the failure this whole file exists to prevent.
+#
+# So the body ends at the first line that can only be something else: the next
+# member (`def`, `async def`, or the decorator that precedes one), or anything
+# at column zero, which is the end of the class. Erring early is safe -- a body
+# cut short fails the "exactly one" assertion and stops the build. Erring late
+# is the silent case.
 method_body() {
-  awk 'f && /^    def / { exit } /^    def _build_agent_context\(/ { f = 1 } f' "$1"
+  awk '
+    f && /^    (async[ \t]+)?def / { exit }
+    f && /^    @/                  { exit }
+    f && /^[^ \t\r]/               { exit }
+    /^    (async[ \t]+)?def _build_agent_context[ \t]*\(/ { f = 1 }
+    f
+  ' "$1"
 }
 
 BODY=$(method_body "$FILE")
