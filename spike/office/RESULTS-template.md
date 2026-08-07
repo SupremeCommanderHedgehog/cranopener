@@ -92,8 +92,9 @@ endpoint is still in reach.
 
 ## Decision
 
-From the table in
-`docs/superpowers/specs/2026-08-06-cranopener-genai-harness-design.md`.
+The rows below are the whole table — they are reproduced here rather than
+referenced, because the design document they came from is kept out of this
+public repository and a reader on the day would have nothing to follow.
 Thresholds were set in advance so the call is not made by whatever feels
 encouraging after a long drive.
 
