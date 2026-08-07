@@ -200,9 +200,19 @@ Write-Host '     The gateway sets SSL_CERT_FILE to it, which REPLACES the defaul
 Write-Host '     trust store rather than adding to it -- so this file must contain'
 Write-Host '     the system roots as well as any corporate roots, or every upstream'
 Write-Host '     call fails looking like a provider outage. To build one:'
-Write-Host '       podman run --rm ghcr.io/berriai/litellm:main-stable \'
-Write-Host '         cat /etc/ssl/certs/ca-certificates.crt > extra-roots.pem'
-Write-Host '       cat your-corporate-roots.pem >> extra-roots.pem'
+# --entrypoint cat, before the image name, and on one line. The image's
+# entrypoint is litellm itself, so `podman run IMAGE cat ...` is parsed as a
+# litellm subcommand and exits 2 -- while the redirect has already truncated
+# the target to zero bytes, manufacturing exactly the empty bundle the check
+# in cranopener.ps1 exists to catch. A bash-style `\` continuation is wrong
+# here too: this text is read at a PowerShell prompt, where `\` is not a line
+# continuation, so the command is printed unwrapped.
+Write-Host "       podman run --rm --entrypoint cat ghcr.io/berriai/litellm:main-stable /etc/ssl/certs/ca-certificates.crt > `"$Destination\certs\extra-roots.pem`""
+Write-Host "       Get-Content your-corporate-roots.pem >> `"$Destination\certs\extra-roots.pem`""
+Write-Host '     Then check the result is real, because the redirect leaves a file'
+Write-Host '     behind even when the command fails -- expect roughly 200KB, and'
+Write-Host '     treat anything under a few KB as a captured error message:'
+Write-Host "       (Get-Item `"$Destination\certs\extra-roots.pem`").Length"
 Write-Host "  4. edit $Destination\opencode\opencode.proxied.json so its model"
 Write-Host '     IDs match the ones in config.yaml'
 Write-Host "  5. add the scripts directory to PATH so `cranopener` resolves"
