@@ -197,6 +197,17 @@ $tty = if ([Console]::IsInputRedirected -or [Console]::IsOutputRedirected) { '-i
 
 $runArgs = @(
     'run', $tty, '--rm',
+    # NOT redundant with podman's default, however much it looks it. `run
+    # --pod` inherits the pod's restart policy, and the gateway pod declares
+    # `restartPolicy: Always` -- correct for a shared service that should
+    # survive a crash, ruinous for a one-shot session that joins it. Inherited,
+    # the agent exits, podman restarts it, and it exits again forever; --rm can
+    # never fire because the container never stays stopped, so a `cranopener
+    # run "..."` spins at 100% until someone notices. Observed at
+    # RestartCount 65 with ExitCode 0. The pod is the right place for `Always`
+    # and this is the right place to decline it, so the session's lifecycle
+    # does not depend on which pod it happens to join.
+    '--restart=no',
     # kube play sets no labels of its own, so this is what keeps `podman ps`
     # readable across projects -- the job COMPOSE_PROJECT_NAME used to do.
     '--label', "cranopener.project=$project",
