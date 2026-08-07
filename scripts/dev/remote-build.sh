@@ -40,6 +40,8 @@ ssh -i "$KEY" "$HOST" "cd '$DIR' && set -a && . /tmp/cranopener.versions && set 
     --build-arg JULIA_VERSION=\"\$JULIA_VERSION\" \
     --build-arg JULIA_URL=\"\$JULIA_URL\" \
     --build-arg JULIA_SHA256=\"\$JULIA_SHA256\" \
+    --build-arg OPENHANDS_VERSION=\"\$OPENHANDS_VERSION\" \
+    --build-arg AIDER_VERSION=\"\$AIDER_VERSION\" \
     -t '$TAG' ."
 
 echo "==> smoke testing $TAG"

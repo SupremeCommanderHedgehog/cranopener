@@ -115,6 +115,8 @@ jobs:
             JULIA_VERSION=${{ steps.versions.outputs.JULIA_VERSION }}
             JULIA_URL=${{ steps.versions.outputs.JULIA_URL }}
             JULIA_SHA256=${{ steps.versions.outputs.JULIA_SHA256 }}
+            OPENHANDS_VERSION=${{ steps.versions.outputs.OPENHANDS_VERSION }}
+            AIDER_VERSION=${{ steps.versions.outputs.AIDER_VERSION }}
           cache-from: type=gha
 
       - name: Smoke test (pull request)
@@ -155,6 +157,8 @@ jobs:
             JULIA_VERSION=${{ steps.versions.outputs.JULIA_VERSION }}
             JULIA_URL=${{ steps.versions.outputs.JULIA_URL }}
             JULIA_SHA256=${{ steps.versions.outputs.JULIA_SHA256 }}
+            OPENHANDS_VERSION=${{ steps.versions.outputs.OPENHANDS_VERSION }}
+            AIDER_VERSION=${{ steps.versions.outputs.AIDER_VERSION }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: true
@@ -205,6 +209,8 @@ jobs:
             echo "| opencode | ${{ steps.versions.outputs.OPENCODE_VERSION }} |"
             echo "| Go | ${{ steps.versions.outputs.GO_VERSION }} |"
             echo "| Julia | ${{ steps.versions.outputs.JULIA_VERSION }} |"
+            echo "| OpenHands | ${{ steps.versions.outputs.OPENHANDS_VERSION }} |"
+            echo "| aider | ${{ steps.versions.outputs.AIDER_VERSION }} |"
             echo ""
             echo "Digest: \`${{ steps.build.outputs.digest }}\`"
           } >> "$GITHUB_STEP_SUMMARY"

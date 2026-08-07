@@ -116,7 +116,7 @@ assert_eq 'no .mil or .gov hostnames in templates' '' "${leaked% }"
 # launcher now names these variables, not the templates.
 unexpected=$(grep -rIohE '\b[A-Z][A-Z0-9_]*_API_KEY\b' kube/ scripts/ 2>/dev/null \
   | sort -u \
-  | grep -vE '^(PROVIDER_[ABC]|ANTHROPIC|OPENAI)_API_KEY$' \
+  | grep -vE '^(PROVIDER_[ABC]|ANTHROPIC|OPENAI|CRANOPENER_LLM)_API_KEY$' \
   | tr '\n' ' ')
 assert_eq 'gateway credentials use generic PROVIDER_* names' '' "${unexpected% }"
 

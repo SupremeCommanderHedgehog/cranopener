@@ -27,10 +27,27 @@ Deliberately has no ``#!`` line: build hosts running fapolicyd refuse to read
 shebang'd Python files, and this is always invoked as ``python3 <file>``. It
 must run with the interpreter that has ``openhands`` installed.
 
+Two modes:
+
+  write   --model/--base-url/--api-key[-env]/--out, generating the file
+  check   --check PATH, loading an existing file through the same
+          ``Agent.model_validate_json`` the CLI uses and asserting
+          ``native_tool_calling``
+
+The check mode exists because generation is not the only way this file can be
+wrong. It can be stale from a previous model, hand-edited, truncated by a full
+disk, or mounted from somewhere else entirely -- and every one of those
+degrades the same silent way, into a default agent that sends ``tools``. The
+adapter runs the check immediately before launching the harness, so what is
+asserted is the file the harness is about to read, not the file this script
+once wrote.
+
 Usage:
   python3 make-openhands-settings.py --model openai/some-model \
-      --base-url https://endpoint.example/v1 --api-key KEY \
+      --base-url https://endpoint.example/v1 --api-key-env CRANOPENER_LLM_API_KEY \
       --out "$OPENHANDS_PERSISTENCE_DIR/agent_settings.json"
+
+  python3 make-openhands-settings.py --check "$OPENHANDS_PERSISTENCE_DIR/agent_settings.json"
 """
 import argparse
 import os
@@ -55,18 +72,89 @@ def build_agent(model, base_url, api_key, native_tool_calling):
     return Agent(llm=llm)
 
 
+def check(path, native_tool_calling):
+    """Load `path` the way the CLI does and assert native_tool_calling.
+
+    Deliberately the same call as ``AgentStore.load_from_disk`` --
+    ``Agent.model_validate_json`` -- because the failure being caught is that
+    the store swallows a validation error, prints one line, returns None, and
+    lets the CLI build a default agent whose ``native_tool_calling`` is True.
+    Anything short of actually validating the bytes would miss it.
+    """
+    try:
+        with open(path, encoding="utf-8") as fh:
+            payload = fh.read()
+        agent = Agent.model_validate_json(payload)
+    except OSError as exc:
+        # Message rather than traceback: the reader's next move is to look at
+        # the path, and thirty lines of pydantic frames do not help them get
+        # there any faster.
+        raise SystemExit("%s: cannot read: %s" % (path, exc))
+    except ValueError as exc:
+        raise SystemExit(
+            "%s: does not load as an openhands.sdk.Agent, so the CLI would "
+            "discard it and silently run a default agent with "
+            "native_tool_calling=True: %s" % (path, str(exc).splitlines()[0]))
+
+    if agent.llm.native_tool_calling != native_tool_calling:
+        raise SystemExit(
+            "%s: native_tool_calling=%r, wanted %r. Running as-is sends a "
+            "`tools` array to an endpoint that refuses it."
+            % (path, agent.llm.native_tool_calling, native_tool_calling))
+
+    print("checked %s (native_tool_calling=%r)"
+          % (path, agent.llm.native_tool_calling), file=sys.stderr)
+    return 0
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("--model", required=True)
-    p.add_argument("--base-url", required=True)
-    p.add_argument("--api-key", required=True)
-    p.add_argument("--out", required=True)
+    p.add_argument("--model")
+    p.add_argument("--base-url")
+    p.add_argument("--api-key",
+                   help="the key itself; prefer --api-key-env")
+    # /proc/<pid>/cmdline is world-readable on Linux and /proc/<pid>/environ is
+    # not, so a key passed as an argument is legible to every other uid on the
+    # box for the lifetime of the call, and lands in `ps` output besides. The
+    # variable name is what crosses the command line here; the value never
+    # does.
+    p.add_argument("--api-key-env", metavar="VAR",
+                   help="name of an environment variable holding the key")
+    p.add_argument("--out")
+    p.add_argument("--check", metavar="PATH",
+                   help="validate an existing settings file instead of "
+                        "writing one, and exit non-zero if it would not load "
+                        "or carries the wrong native_tool_calling")
     p.add_argument("--native-tool-calling", action="store_true",
                    help="leave native tool calling on (the SDK default); "
                         "omit this for prompt-mode tool calling")
     args = p.parse_args(argv)
 
-    agent = build_agent(args.model, args.base_url, args.api_key,
+    if args.check:
+        return check(args.check, args.native_tool_calling)
+
+    missing = [name for name, value in (("--model", args.model),
+                                        ("--base-url", args.base_url),
+                                        ("--out", args.out)) if not value]
+    if missing:
+        p.error("missing required argument(s): %s" % ", ".join(missing))
+
+    if bool(args.api_key) == bool(args.api_key_env):
+        p.error("give exactly one of --api-key or --api-key-env")
+
+    if args.api_key_env:
+        api_key = os.environ.get(args.api_key_env)
+        # An unset variable would otherwise serialize as the string "None" and
+        # authenticate against nothing, which the provider reports as a 401 the
+        # operator then debugs at the gateway instead of here.
+        if not api_key:
+            raise SystemExit(
+                "$%s is unset or empty, so there is no API key to write into "
+                "%s" % (args.api_key_env, args.out))
+    else:
+        api_key = args.api_key
+
+    agent = build_agent(args.model, args.base_url, api_key,
                         args.native_tool_calling)
     # The same call AgentStore.save makes. Without the context the api_key
     # serializes as '**********' and the stored file cannot authenticate.
