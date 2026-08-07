@@ -54,7 +54,7 @@ docker run -it --rm \
   ghcr.io/supremecommanderhedgehog/cranopener:latest
 ```
 
-## Running under podman compose
+## Running under podman kube
 
 For unattended runs behind an API gateway: model credentials isolated from the
 container that executes commands, retries and a spend cap at the gateway, and
@@ -62,26 +62,30 @@ no permission prompts to stall a session nobody is watching.
 
 ```powershell
 pwsh -File scripts\install.ps1   # copies templates to ~\.cranopener
-# fill in ~\.cranopener\litellm\config.yaml, .env, and certs\
+# fill in ~\.cranopener\litellm\config.yaml and certs\, then export your keys
 cranopener                       # against the current directory
 cranopener -Direct               # bypass the gateway, use stock providers
-cranopener -Down                 # stop this project's stack
+cranopener -Down                 # stop the shared gateway
 ```
 
-Two things that bite if you skip them. `certs/extra-roots.pem` must be a
-**complete** CA bundle — the gateway points `SSL_CERT_FILE` at it, which
-replaces the default trust store rather than adding to it, so a roots-only or
-empty file makes every upstream call fail looking like a provider outage. And
-the spend cap in `config.yaml` is **not enforced**: LiteLLM tracks spend in
-Postgres and this stack provisions none, so bound unattended runs some other
-way.
+The gateway is a long-lived pod shared by every project; a session is a
+foreground container that joins it with `--pod`. They use different mechanisms
+because they are different kinds of thing — `podman kube play` describes a
+service well and an interactive one-shot badly.
 
-The launcher exists because compose resolves relative volume paths against the
-compose file rather than the shell, derives its project name from that same
-directory, and gives `up` no terminal for the TUI. It sets the workspace path
-and a per-directory project name, then runs opencode in the foreground.
+Three things that bite if you skip them. **Credentials come from the
+environment**, never a file: export `PROVIDER_A_API_KEY` and friends before
+launching, and the launcher pipes them to the gateway over stdin so they never
+reach a command line. **`certs/extra-roots.pem` must be a complete CA bundle** —
+the gateway points `SSL_CERT_FILE` at it, which replaces the default trust
+store rather than adding to it, so a roots-only or empty file makes every
+upstream call fail looking like a provider outage. And **the spend cap is not
+enforced**: LiteLLM tracks spend in Postgres and this stack provisions none, so
+bound unattended runs some other way.
 
-Templates in `compose/` carry placeholder endpoints. Real hostnames, model
+`-Down` stops the gateway for every project, not just this one.
+
+Templates in `kube/` carry placeholder endpoints. Real hostnames, model
 identifiers, and credentials belong only in `~\.cranopener`, which is never
 committed. `install.ps1` never overwrites what is already there, and reports
 which files have drifted from the shipped templates.

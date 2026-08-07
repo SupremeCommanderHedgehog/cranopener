@@ -92,7 +92,7 @@ print(" ".join(v["hostPath"]["path"] for v in vols
 assert_eq 'every hostPath uses the install-time placeholder' '' "$badpaths"
 
 # --- the agent must reach the gateway over the pod -------------------------
-# Containers in a pod share one network namespace, so the compose-era
+# Containers in a pod share one network namespace, so the old separate-stack
 # http://litellm:4000 does not resolve at all now. Left stale it surfaces at
 # the first prompt of a session and reads like a gateway outage.
 baseurl=$(python3 -c '
