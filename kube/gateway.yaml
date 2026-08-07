@@ -1,0 +1,62 @@
+# Gateway pod: LiteLLM alone, shared by every project.
+#
+# This is a TEMPLATE. Playing it directly starts a gateway with no credentials
+# -- valid, playable, and loudly useless. cranopener.ps1 replaces the
+# __CRANOPENER_GATEWAY_ENV__ line with an env block built from its own
+# environment and pipes the result to `podman kube play -`.
+#
+# Credentials are never written to disk. `kind: Secret` is deliberately not
+# used: podman's secret store driver is `file`, and the plaintext outlives the
+# session until someone runs `podman secret rm`.
+#
+# __CRANOPENER_HOME__ is replaced at install time with a VM-side path
+# (/mnt/c/...). hostPath resolves inside the podman machine, not on Windows --
+# a C:/ path is looked up as /C:/ and reported missing. Note that `podman run
+# -v` accepts the Windows form, so the two are not interchangeable.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: cranopener-gateway
+spec:
+  # The gateway is shared and long-lived; a crash should not require the next
+  # project to notice and restart it by hand.
+  restartPolicy: Always
+  containers:
+    - name: litellm
+      image: ghcr.io/berriai/litellm:main-stable
+      # args, not command: the image's entrypoint is litellm itself, and
+      # `command` would replace it rather than pass arguments to it.
+      args: ["--config", "/app/config.yaml", "--port", "4000"]
+      env: []  # __CRANOPENER_GATEWAY_ENV__
+      volumeMounts:
+        - name: litellm-config
+          mountPath: /app/config.yaml
+          readOnly: true
+        - name: ca-bundle
+          mountPath: /etc/ssl/certs/extra-roots.pem
+          readOnly: true
+      livenessProbe:
+        # python3 rather than curl: the litellm image ships no curl, and a
+        # probe naming a missing binary never reports healthy -- the symptom
+        # is a timeout in front of a gateway that is working perfectly.
+        #
+        # /health/liveliness answers without touching upstreams. /health tries
+        # every configured provider and stays red until real credentials exist.
+        exec:
+          command:
+            - python3
+            - -c
+            - import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness', timeout=3)
+        initialDelaySeconds: 10
+        periodSeconds: 5
+        timeoutSeconds: 3
+        failureThreshold: 12
+  volumes:
+    - name: litellm-config
+      hostPath:
+        path: __CRANOPENER_HOME__/litellm/config.yaml
+        type: File
+    - name: ca-bundle
+      hostPath:
+        path: __CRANOPENER_HOME__/certs/extra-roots.pem
+        type: File
