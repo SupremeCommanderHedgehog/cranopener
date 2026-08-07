@@ -22,35 +22,34 @@ function Assert-Eq($desc, $expected, $actual) {
     }
 }
 
-# --- ConvertTo-ComposePath -------------------------------------------------
-# compose splits volume specs on ':', so a raw C:\Users\... parses as host "C"
-# with container path "\Users\...". Forward slashes remove the ambiguity.
+# --- ConvertTo-PodmanPath --------------------------------------------------
+# `podman run -v` splits volume specs on ':', so a raw C:\Users\... parses as
+# host "C" with container path "\Users\...". Forward slashes remove the
+# ambiguity.
 
 Assert-Eq 'backslashes become forward slashes' `
-    'C:/Users/me/proj' (ConvertTo-ComposePath 'C:\Users\me\proj')
+    'C:/Users/me/proj' (ConvertTo-PodmanPath 'C:\Users\me\proj')
 
 Assert-Eq 'already-forward paths are unchanged' `
-    'C:/Users/me/proj' (ConvertTo-ComposePath 'C:/Users/me/proj')
+    'C:/Users/me/proj' (ConvertTo-PodmanPath 'C:/Users/me/proj')
 
 Assert-Eq 'trailing separator is stripped' `
-    'C:/Users/me/proj' (ConvertTo-ComposePath 'C:\Users\me\proj\')
+    'C:/Users/me/proj' (ConvertTo-PodmanPath 'C:\Users\me\proj\')
 
 Assert-Eq 'spaces are preserved' `
-    'C:/Users/me/my proj' (ConvertTo-ComposePath 'C:\Users\me\my proj')
+    'C:/Users/me/my proj' (ConvertTo-PodmanPath 'C:\Users\me\my proj')
 
 # A drive root must keep its trailing slash. Trimming it yields "C:", and the
 # volume specification then reads "C::/workspace".
 Assert-Eq 'drive root keeps its slash' `
-    'C:/' (ConvertTo-ComposePath 'C:\')
+    'C:/' (ConvertTo-PodmanPath 'C:\')
 
 Assert-Eq 'forward-slash drive root keeps its slash' `
-    'C:/' (ConvertTo-ComposePath 'C:/')
+    'C:/' (ConvertTo-PodmanPath 'C:/')
 
 # --- ConvertTo-ProjectName -------------------------------------------------
-# Compose derives its project name from the compose file's directory. cranopener
-# keeps one install location for every repository, so the default would make
-# every project collide -- starting cranopener in one repo would reuse or tear
-# down another's containers.
+# The gateway pod is shared and kube play sets no labels, so this value is what
+# tells one project's session from another's in `podman ps`.
 
 # The name ends in a six-hex-character digest of the full path. These cases
 # are about the readable part, so strip it rather than asserting on offsets.
@@ -96,8 +95,8 @@ Assert-Eq 'a trailing separator does not change the name' `
     (ConvertTo-ProjectName 'C:\work\clientA\api') `
     (ConvertTo-ProjectName 'C:\work\clientA\api\')
 
-# Compose only accepts lowercase alphanumerics, hyphens, and underscores.
-Assert-Eq 'the generated name is compose-legal' `
+# Label values only accept lowercase alphanumerics, hyphens, and underscores.
+Assert-Eq 'the generated name is a legal label value' `
     $true `
     ((ConvertTo-ProjectName 'C:\Users\me\My.Proj') -cmatch '^[a-z0-9_-]+$')
 
@@ -168,9 +167,9 @@ Assert-Eq 'a leading exclamation mark is not read as a tag' `
     "      env:`n        - name: K`n          value: '!secret'" `
     (New-GatewayEnvBlock -Names @('K') -Values @{ 'K' = '!secret' } -Indent 6)
 
-# Absent variables are emitted empty rather than omitted, matching compose's
-# ${VAR:-}. A missing key should fail at the provider with an auth error, not
-# at startup with a malformed manifest.
+# Absent variables are emitted empty rather than omitted, matching shell
+# parameter expansion's ${VAR:-}. A missing key should fail at the provider
+# with an auth error, not at startup with a malformed manifest.
 Assert-Eq 'a missing value becomes an empty string' `
     "      env:`n        - name: K`n          value: ''" `
     (New-GatewayEnvBlock -Names @('K') -Values @{} -Indent 6)

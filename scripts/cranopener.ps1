@@ -46,7 +46,7 @@ if (-not (Test-Path $Install)) {
 . (Join-Path $PSScriptRoot 'lib/launcher-lib.ps1')
 
 $here = (Get-Location).Path
-$env:CRANOPENER_WORKSPACE = ConvertTo-ComposePath $here
+$env:CRANOPENER_WORKSPACE = ConvertTo-PodmanPath $here
 $env:COMPOSE_PROJECT_NAME = ConvertTo-ProjectName $here
 
 $composeFile = if ($Direct) { 'compose.direct.yaml' } else { 'compose.yaml' }

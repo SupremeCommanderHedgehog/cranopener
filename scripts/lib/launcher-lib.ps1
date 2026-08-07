@@ -1,21 +1,18 @@
 # Pure functions used by cranopener.ps1. Kept separate from the launcher so
 # they can be unit tested without invoking podman.
 
-function ConvertTo-ComposePath {
+function ConvertTo-PodmanPath {
     <#
     .SYNOPSIS
-      Render a Windows path so compose can parse it in a volume specification.
+      Render a Windows path so podman can parse it in a volume specification.
 
     .DESCRIPTION
-      Compose splits volume specifications on ':'. A Windows path like
+      `podman run -v` splits volume specifications on ':'. A Windows path like
       C:\Users\me\proj therefore parses as host "C" with container path
       "\Users\me\proj". Forward slashes remove the ambiguity.
 
-      This is for `podman run -v` / compose volume specs only. For a
-      Kubernetes hostPath value (`podman kube play`), use ConvertTo-VmPath
-      instead -- this function still returns a Windows-style path, and a
-      hostPath given a Windows-style path resolves inside the podman machine
-      and fails to find the file.
+      This is NOT the translation hostPath needs -- see ConvertTo-VmPath. The
+      two are different on purpose and are not interchangeable.
     #>
     param([Parameter(Mandatory)][string]$Path)
 
@@ -36,15 +33,13 @@ function ConvertTo-ComposePath {
 function ConvertTo-ProjectName {
     <#
     .SYNOPSIS
-      Derive a compose project name from a working directory.
+      Derive a per-project label value from a working directory.
 
     .DESCRIPTION
-      Compose derives its project name from the compose file's directory.
-      Because cranopener keeps one install location shared by every
-      repository, the default would make every project collide -- starting
-      cranopener in one repo would reuse or tear down another's containers.
-      Deriving the name from the working directory instead keeps stacks
-      distinct and `podman ps` readable.
+      Kube play sets no labels of its own, and the gateway pod is shared by
+      every project, so without this there would be nothing distinguishing one
+      project's session from another's in `podman ps`. The launcher applies
+      the result as cranopener.project on the agent container.
 
       The leaf directory alone is not enough. Two clients each with an "api"
       directory is an ordinary layout, and colliding on it reintroduces the
@@ -54,7 +49,7 @@ function ConvertTo-ProjectName {
     #>
     param([Parameter(Mandatory)][string]$Path)
 
-    $normalized = ConvertTo-ComposePath $Path
+    $normalized = ConvertTo-PodmanPath $Path
 
     # Normalise before hashing so C:\a\b, C:/a/b, and C:\a\b\ are one project
     # rather than three.
@@ -66,7 +61,7 @@ function ConvertTo-ProjectName {
 
     if (-not $leaf) { $leaf = 'root' }
 
-    # Compose project names allow lowercase alphanumerics, hyphens, and
+    # Label values allow lowercase alphanumerics, hyphens, and
     # underscores. Fold anything else to a hyphen, then tidy the result so a
     # directory like "my..proj" does not become "my--proj".
     $leaf = $leaf.ToLower() -replace '[^a-z0-9_-]', '-'
@@ -100,8 +95,8 @@ function ConvertTo-VmPath {
 
       The two forms are interchangeable everywhere else in this project, which
       is precisely why this is easy to get wrong. Use this for a Kubernetes
-      hostPath value only -- for a `podman run -v` / compose volume spec, use
-      ConvertTo-ComposePath instead, which returns a Windows-style path.
+      hostPath value only -- for a `podman run -v` volume spec, use
+      ConvertTo-PodmanPath instead, which returns a Windows-style path.
     #>
     param([Parameter(Mandatory)][string]$Path)
 
