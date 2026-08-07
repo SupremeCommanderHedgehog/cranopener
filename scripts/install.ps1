@@ -23,8 +23,10 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-# ConvertTo-VmPath lives here. hostPath resolves inside the podman machine, so
-# the install directory has to be rewritten to its /mnt form.
+# ConvertTo-VmPath lives here (hostPath resolves inside the podman machine, so
+# the install directory has to be rewritten to its /mnt form), along with
+# Get-InstallBytes and Get-Sha256, which define what a correct install looks
+# like for both the write path and the drift check.
 . (Join-Path $PSScriptRoot 'lib/launcher-lib.ps1')
 
 $source = Join-Path (Split-Path -Parent $PSScriptRoot) 'kube'
@@ -37,55 +39,6 @@ if (-not (Test-Path $source)) { throw "missing kube templates at $source" }
 # untouched. Doing it after the copy loop left five files and an
 # unsubstituted placeholder behind for the operator to clean up by hand.
 $vmHome = ConvertTo-VmPath $Destination
-
-function Get-InstallBytes {
-    <#
-    .SYNOPSIS
-      The exact bytes this installer writes for one template.
-
-    .DESCRIPTION
-      Both the copy and the drift check go through here, and that is the whole
-      point. gateway.yaml is substituted on the way out, so an installed copy
-      never matches the raw template; a drift check that compared against the
-      raw template would flag the manifest forever and bury the one signal the
-      report exists to carry. Comparing against this instead means a
-      substitution-only difference reads as unchanged while every other
-      difference still reports as drift. Two separate implementations of "what
-      a correct install looks like" would eventually disagree -- hence one.
-    #>
-    param(
-        [Parameter(Mandatory)][string]$TemplatePath,
-        [Parameter(Mandatory)][string]$Relative,
-        [Parameter(Mandatory)][string]$VmHome
-    )
-
-    if ($Relative -eq 'gateway.yaml') {
-        # gateway.yaml ships with a placeholder because hostPath needs a
-        # literal absolute path and kube YAML has no interpolation. The value
-        # must be the path the podman machine sees, not the Windows one:
-        # `podman run -v` translates Windows paths but hostPath does not, and
-        # C:/x is looked up as /C:/x.
-        $text = (Get-Content $TemplatePath -Raw).Replace('__CRANOPENER_HOME__', $VmHome)
-        # -Raw in, UTF8-no-BOM bytes out: the file's own LF endings pass
-        # through untouched. Reading into a string array and writing it back
-        # would re-join with CRLF, and the launcher's marker regex is anchored
-        # per line -- the gateway would then fail with "no
-        # __CRANOPENER_GATEWAY_ENV__ marker" while the marker sits plainly
-        # visible in the file. The launcher tolerates CRLF too; neither guard
-        # stands alone.
-        return (New-Object System.Text.UTF8Encoding $false).GetBytes($text)
-    }
-
-    return [System.IO.File]::ReadAllBytes($TemplatePath)
-}
-
-function Get-Sha256 {
-    param([Parameter(Mandatory)][byte[]]$Bytes)
-
-    $sha = [System.Security.Cryptography.SHA256]::Create()
-    try { return [BitConverter]::ToString($sha.ComputeHash($Bytes)).Replace('-', '') }
-    finally { $sha.Dispose() }
-}
 
 New-Item -ItemType Directory -Force -Path $Destination | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $Destination 'certs') | Out-Null

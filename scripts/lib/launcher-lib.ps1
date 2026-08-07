@@ -1,5 +1,12 @@
-# Pure functions used by cranopener.ps1. Kept separate from the launcher so
-# they can be unit tested without invoking podman.
+# Pure functions shared by cranopener.ps1 and install.ps1. Kept out of both so
+# they can be unit tested without invoking podman or writing to an install
+# directory.
+#
+# The rule for what belongs here is decidability, not tidiness: anything that
+# decides something -- what a correct install looks like, whether a gateway is
+# ready -- lives here so a test can pin it. Anything that shells out stays in
+# its script. Every function below was inline somewhere first, and every one of
+# them was the subject of a bug that a unit test would have caught.
 
 function ConvertTo-PodmanPath {
     <#
@@ -172,4 +179,135 @@ function New-GatewayEnvBlock {
     }
 
     return ($lines -join "`n")
+}
+
+function Get-LastProbe {
+    <#
+    .SYNOPSIS
+      The start time of the most recent health probe recorded on a container.
+
+    .DESCRIPTION
+      Returned as an identity, never parsed as a time: the only question ever
+      asked of it is whether it differs from one snapshotted earlier, which
+      proves a probe ran in between. That keeps Go's nanosecond timestamps out
+      of .NET's date parser entirely.
+
+      '' when no probe has run, when the container has no healthcheck, or when
+      there is no container -- all of which mean the same thing to the caller.
+    #>
+    param($State)
+
+    if ($null -eq $State -or $null -eq $State.Health -or -not $State.Health.Log) { return '' }
+    return [string]$State.Health.Log[-1].Start
+}
+
+function Get-GatewayVerdict {
+    <#
+    .SYNOPSIS
+      Decide, from a gateway container's state, whether to proceed.
+
+    .DESCRIPTION
+      Returns one of:
+        ready       -- running, and freshly reported healthy
+        wait        -- no verdict yet; poll again
+        not-running -- the container exists but is not running
+        unhealthy   -- the healthcheck has settled on a failure
+
+      Two properties this has to keep, both of which cost real debugging:
+
+      A recorded health verdict is not a current one. podman does not clear
+      .State.Health.Status when a container stops, so it goes on reading
+      'healthy' for a gateway that is not running. Believing it hands the
+      session an ECONNREFUSED at the first prompt -- precisely the failure the
+      poll exists to prevent. .State.Running gates everything.
+
+      A verdict from before a restart must not be believed either. Where the
+      caller started the pod on this run, the status is trusted only once a
+      probe has run since -- established by comparing against ProbeBaseline,
+      snapshotted before the start.
+
+      The caller owns the timing, not this function: PastGrace says whether the
+      caller's tolerance for a not-yet-started container has elapsed, so a
+      container podman was just told to start is not reported down before it
+      has had a chance to flip.
+    #>
+    param(
+        $State,
+        [bool]$StartedNow = $false,
+        [string]$ProbeBaseline = '',
+        [bool]$PastGrace = $false
+    )
+
+    if ($null -eq $State) { return 'wait' }
+
+    if (-not $State.Running -and $PastGrace) { return 'not-running' }
+
+    if ($State.Running) {
+        $status = if ($null -eq $State.Health) { '' } else { [string]$State.Health.Status }
+        $fresh = (-not $StartedNow) -or ((Get-LastProbe $State) -ne $ProbeBaseline)
+        if ($fresh) {
+            if ($status -eq 'healthy') { return 'ready' }
+            if ($status -eq 'unhealthy') { return 'unhealthy' }
+        }
+    }
+
+    return 'wait'
+}
+
+function Get-InstallBytes {
+    <#
+    .SYNOPSIS
+      The exact bytes the installer writes for one template.
+
+    .DESCRIPTION
+      Both the copy and the drift check go through here, and that is the whole
+      point. gateway.yaml is substituted on the way out, so an installed copy
+      never matches the raw template; a drift check that compared against the
+      raw template would flag the manifest forever and bury the one signal the
+      report exists to carry. Comparing against this instead means a
+      substitution-only difference reads as unchanged while every other
+      difference still reports as drift. Two separate implementations of "what
+      a correct install looks like" would eventually disagree -- hence one.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$TemplatePath,
+        [Parameter(Mandatory)][string]$Relative,
+        [Parameter(Mandatory)][string]$VmHome
+    )
+
+    if ($Relative -eq 'gateway.yaml') {
+        # gateway.yaml ships with a placeholder because hostPath needs a
+        # literal absolute path and kube YAML has no interpolation. The value
+        # must be the path the podman machine sees, not the Windows one:
+        # `podman run -v` translates Windows paths but hostPath does not, and
+        # C:/x is looked up as /C:/x.
+        $text = (Get-Content $TemplatePath -Raw).Replace('__CRANOPENER_HOME__', $VmHome)
+        # -Raw in, UTF8-no-BOM bytes out: the file's own LF endings pass
+        # through untouched. Reading into a string array and writing it back
+        # would re-join with CRLF, and the launcher's marker regex is anchored
+        # per line -- the gateway would then fail with "no
+        # __CRANOPENER_GATEWAY_ENV__ marker" while the marker sits plainly
+        # visible in the file. The launcher tolerates CRLF too; neither guard
+        # stands alone.
+        return (New-Object System.Text.UTF8Encoding $false).GetBytes($text)
+    }
+
+    return [System.IO.File]::ReadAllBytes($TemplatePath)
+}
+
+function Get-Sha256 {
+    <#
+    .SYNOPSIS
+      Uppercase hex SHA-256 of a byte array.
+
+    .DESCRIPTION
+      Bytes rather than a path because the installer compares what it would
+      write against what is on disk, and one side of that has never been a
+      file.
+    #>
+    param([Parameter(Mandatory)][byte[]]$Bytes)
+
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try { return [BitConverter]::ToString($sha.ComputeHash($Bytes)).Replace('-', '') }
+    finally { $sha.Dispose() }
 }

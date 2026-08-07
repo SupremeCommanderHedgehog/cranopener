@@ -138,18 +138,14 @@ foreach ($rel in $required) {
 # Read the gateway container's whole state in one call, so Running and the
 # health result cannot come from two different instants. $null when there is no
 # such container.
+#
+# This one shells out, so it stays here. What it feeds -- Get-GatewayVerdict,
+# Get-LastProbe -- is a pure decision and lives in launcher-lib.ps1 where
+# test-launcher.ps1 can pin it.
 function Get-GatewayState {
     $json = podman inspect --format '{{json .State}}' $GatewayCtr 2>$null
     if ($LASTEXITCODE -ne 0 -or -not $json) { return $null }
     return ($json | ConvertFrom-Json)
-}
-
-# The start time of the most recent health probe, or '' if none has run. Used
-# purely as an identity to compare against a snapshot -- never parsed as a
-# time -- so a value that has changed proves a probe ran since the snapshot.
-function Get-LastProbe($state) {
-    if ($null -eq $state -or $null -eq $state.Health -or -not $state.Health.Log) { return '' }
-    return [string]$state.Health.Log[-1].Start
 }
 
 if (-not $Direct) {
@@ -260,38 +256,33 @@ if (-not $Direct) {
     # argument-quoting bug and is not one. Any probe the launcher runs is a
     # Windows command line and is subject to this.
     #
-    # Two conditions, not one, because a recorded health status is not a
-    # current one. podman leaves .State.Health.Status reading 'healthy' on a
-    # container it has stopped, so on its own it would pass instantly against a
-    # dead gateway and the session would fail at the first prompt with
-    # ECONNREFUSED -- exactly what this poll exists to prevent. .State.Running
-    # is the discriminator. And where this run started the pod, the status is
-    # only believed once a probe has run since that start, so the verdict
-    # cannot be the one left over from before it stopped.
+    # What counts as ready is decided by Get-GatewayVerdict, not here -- it is a
+    # pure function of the container state and is unit tested in
+    # test-launcher.ps1. Two of its properties are the ones that cost real
+    # debugging: .State.Running gates everything, because podman leaves
+    # .State.Health.Status reading 'healthy' on a container it has stopped; and
+    # where this run started the pod, the status is believed only once a probe
+    # has run since. This loop owns only the timing and the messages.
     $deadline   = (Get-Date).AddSeconds(90)
+    # Tolerated briefly: a container podman has just been told to start may not
+    # have flipped yet. Past this it means the gateway is down or crash-looping,
+    # and saying so now is far better than spending the remaining 80s to say it
+    # less clearly.
     $graceUntil = (Get-Date).AddSeconds(10)
     $ready = $false
     $state = $null
     while ((Get-Date) -lt $deadline) {
         $state = Get-GatewayState
-        if ($null -ne $state) {
-            # Tolerated briefly: a container podman has just been told to start
-            # may not have flipped yet. Past the grace period it means the
-            # gateway is down or crash-looping, and saying so now is far better
-            # than spending the remaining 80s to say it less clearly.
-            if (-not $state.Running -and (Get-Date) -gt $graceUntil) {
-                throw "the gateway container exists but is not running -- it may be crash-looping on a bad config. Check: podman logs $GatewayCtr"
-            }
-            if ($state.Running) {
-                $status = if ($null -eq $state.Health) { '' } else { [string]$state.Health.Status }
-                $fresh  = (-not $startedNow) -or ((Get-LastProbe $state) -ne $probeBaseline)
-                if ($fresh) {
-                    if ($status -eq 'healthy') { $ready = $true; break }
-                    if ($status -eq 'unhealthy') {
-                        throw "gateway reported unhealthy. Check: podman logs $GatewayCtr"
-                    }
-                }
-            }
+        $verdict = Get-GatewayVerdict -State $state `
+                                      -StartedNow $startedNow `
+                                      -ProbeBaseline $probeBaseline `
+                                      -PastGrace ((Get-Date) -gt $graceUntil)
+        if ($verdict -eq 'ready') { $ready = $true; break }
+        if ($verdict -eq 'not-running') {
+            throw "the gateway container exists but is not running -- it may be crash-looping on a bad config. Check: podman logs $GatewayCtr"
+        }
+        if ($verdict -eq 'unhealthy') {
+            throw "gateway reported unhealthy. Check: podman logs $GatewayCtr"
         }
         Start-Sleep -Seconds 2
     }
