@@ -364,3 +364,55 @@ function Get-HarnessForModel {
 
     return 'opencode'
 }
+
+function Get-LitellmModelId {
+    <#
+    .SYNOPSIS
+      Render a gateway model id as an argument litellm can resolve.
+
+    .DESCRIPTION
+      Two names are involved here and they are very easy to conflate. The
+      gateway's model id -- 'provider-a/some-model' -- is what the operator
+      types, and it is what must appear in the request body LiteLLM receives,
+      because that is the `model_name` its `model_list` matches on. The litellm
+      CLIENT inside the harness needs something else first: a leading transport
+      prefix telling it how to dial. It splits on the FIRST '/', so
+      'openai/provider-a/some-model' resolves the transport as 'openai' and
+      leaves 'provider-a/some-model' as the model -- exactly the id the gateway
+      is listening for. The base URL then decides where the request goes.
+
+      The prefix is an internal detail of how the harness dials, so it is added
+      here and appears in no template, no installed file, and nothing the
+      operator types.
+
+      Always prepended, never conditionally. Treating an id that already begins
+      with a transport-looking segment as pre-prefixed would corrupt a gateway
+      model legitimately named 'openai/...' -- an ordinary model_list entry --
+      by sending only the remainder as the model name, which LiteLLM answers
+      with a model-not-found that reads as a broken gateway.
+
+      Applied here rather than in run-openhands.sh because the adapter's
+      contract is to REFUSE a model it cannot resolve, and container-checks.sh
+      pins that refusal. An adapter that quietly prefixed instead would make its
+      own guard unreachable, and that guard is the only thing between a
+      hand-run adapter and the failure below.
+
+      An empty model throws rather than yielding a bare 'openai/'. That is the
+      quietest failure in this whole path: litellm gives up before opening a
+      socket, so the harness makes zero requests, reports no error, and exits 0
+      -- indistinguishable from a clean run that had nothing to say.
+    #>
+    param(
+        [AllowNull()][AllowEmptyString()][string]$Model,
+        [string]$Transport = 'openai'
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Model)) {
+        throw "Get-LitellmModelId: no model to prefix. litellm resolves the transport from the leading segment of the model id; with nothing to resolve it gives up before opening a socket, and the harness then reports success having sent no requests at all."
+    }
+
+    # Trimmed for the same reason Get-HarnessForModel trims: a stray space from
+    # a quoted argument or a copied model id must not become part of the name
+    # the gateway is asked to match.
+    return "$Transport/$($Model.Trim())"
+}

@@ -24,16 +24,37 @@
   environment `podman inspect` prints in plaintext. Do not leave it running
   indefinitely across projects you are no longer working in.
 
+.PARAMETER Model
+  The model to run, named exactly as the gateway's config.yaml names it --
+  e.g. provider-a/some-model. Omitted, opencode runs with whatever its own
+  config selects.
+
+  This also selects the harness: a provider-A model runs under OpenHands,
+  everything else under opencode. Deliberately not a separate flag. A flag can
+  be set to contradict the model, and opencode against a provider that refuses
+  the `tools` parameter fails on its first tool call with an error that reads
+  as a gateway outage rather than as a misconfiguration.
+
 .EXAMPLE
   cranopener
   cranopener -Direct
   cranopener run "fix the failing test"
+  cranopener -Model provider-a/some-model "fix the failing test"
   cranopener -Down
 #>
-[CmdletBinding()]
+# PositionalBinding = $false, and it is load-bearing. Parameters are positional
+# by default in declaration order, so a plain [string]$Model silently claims
+# position 0 -- and every documented invocation of this script passes the agent
+# command there. `cranopener run "fix the failing test"` then binds Model='run'
+# and forwards `--model run` to opencode, which is a broken run dressed up as a
+# configured one. Named-only is the only form that cannot do that. $Remaining
+# still collects everything unbound, which is what makes the arguments flow
+# through untouched.
+[CmdletBinding(PositionalBinding = $false)]
 param(
     [switch]$Direct,
     [switch]$Down,
+    [string]$Model,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$Remaining
 )
@@ -80,6 +101,33 @@ Write-Host "cranopener: $project -> $workspace" -ForegroundColor DarkGray
 # who asked not to touch it.
 if ($Down -and $Direct) {
     throw '-Direct and -Down cannot be combined: -Down always acts on the shared gateway, and -Direct means no gateway is involved. Run cranopener -Down on its own to stop it.'
+}
+
+# Derived, never asked for. See the .PARAMETER Model note above: a harness flag
+# could be set to contradict the model, and that contradiction is the failure
+# this whole arrangement exists to make unrepresentable.
+$harness = Get-HarnessForModel $Model
+
+# Same shape of contradiction as -Direct/-Down above, for the same reason.
+# Provider A exists only as a model_list entry in the gateway's config -- it is
+# not a stock opencode provider and nothing outside the gateway serves it. So
+# -Direct, which promises no gateway, asks for a model that cannot be reached
+# by any route. Refusing here costs a line; allowing it costs a failure at an
+# endpoint the operator did not know they were not talking to. Checked before
+# anything is started, because the alternative is diagnosing this from podman's
+# output.
+if ($Direct -and $harness -eq 'openhands') {
+    throw "-Direct cannot be used with -Model $Model. That model is served only by the gateway, and -Direct bypasses the gateway entirely, so there is nothing to reach. Drop -Direct to run it through the gateway, or name a model your stock providers serve."
+}
+
+# There is no interactive mode to fall back to on this path: the adapter runs
+# `openhands --headless -t "TASK"`, which needs a task. Refused up here with the
+# other contradiction rather than at the point of use, because everything
+# between the two starts a gateway pod that is shared with every other project.
+# Bringing that up for a session that was never going to run is a slow way to
+# say no, and on a machine with no engine it is a 90-second way.
+if ($harness -eq 'openhands' -and -not $Remaining) {
+    throw "-Model $Model runs under OpenHands, which has no interactive mode here -- it needs a task. Try: cranopener -Model $Model `"fix the failing test`""
 }
 
 if ($Down) {
@@ -406,6 +454,53 @@ if ($Direct) {
     }
 }
 
+if ($harness -eq 'openhands') {
+    # Everything run-openhands.sh reads from the environment, and nothing else.
+    # Each one is optional there and has a working default, so anything unset
+    # here is silence rather than breakage:
+    #
+    #   CRANOPENER_LLM_API_KEY      a credential, so it goes through podman's
+    #                               `--env NAME` pass-through form -- the value
+    #                               is taken from this process instead of being
+    #                               written onto a command line, which is
+    #                               visible in process listings and is read by
+    #                               Windows Defender besides. Absent, the
+    #                               adapter sends 'unused', which is what a
+    #                               gateway with no master key expects and what
+    #                               opencode's own config already carries.
+    #   CRANOPENER_MAX_ITERATIONS   the only real bound on an unattended run:
+    #                               the CLI never passes max_iteration_per_run,
+    #                               so the SDK's own limit is 500 completions,
+    #                               and the gateway's spend cap needs a Postgres
+    #                               this stack does not provision.
+    #   CRANOPENER_TIMEOUT_SECONDS  the backstop the iteration cap cannot be,
+    #                               for a loop that emits no events at all.
+    #
+    # Passed by name for all three, not just the key. Uniformity is the point:
+    # the day one of these stops being a plain number is the day a value-bearing
+    # form would have to be noticed and changed, and it would not be.
+    foreach ($n in 'CRANOPENER_LLM_API_KEY',
+                   'CRANOPENER_MAX_ITERATIONS',
+                   'CRANOPENER_TIMEOUT_SECONDS') {
+        if ([Environment]::GetEnvironmentVariable($n)) { $runArgs += @('--env', $n) }
+    }
+
+    # The session's own outbound TLS. opencode gets NODE_EXTRA_CA_CERTS above;
+    # these are the Python equivalents, and OpenHands is Python. Nothing on the
+    # LLM path needs them -- the gateway is plain HTTP over the pod's shared
+    # network namespace and the gateway owns the upstream TLS -- but the agent
+    # runs git, pip, and uv against a proxy with its own roots, and a failure
+    # there surfaces mid-task as an unexplained tool error.
+    #
+    # These REPLACE the default trust store rather than adding to it, which is
+    # exactly why the bundle is validated above as a complete one. Set only on
+    # this path: opencode's behaviour today is the behaviour that works.
+    $runArgs += @(
+        '--env', 'SSL_CERT_FILE=/etc/ssl/certs/extra-roots.pem',
+        '--env', 'REQUESTS_CA_BUNDLE=/etc/ssl/certs/extra-roots.pem'
+    )
+}
+
 # NO_PROXY is computed rather than passed through, so it has to carry a value.
 # It is not a credential, so argv is fine. In proxied mode the gateway is
 # reached over the pod's shared network namespace -- without localhost here a
@@ -422,7 +517,28 @@ $runArgs += $Image
 # in `exec "$@"`. Passing bare arguments would run `exec run ...` and die with
 # "run: command not found", so the binary is named explicitly. With no
 # arguments the image's own CMD applies.
-if ($Remaining) { $runArgs += @('opencode') + $Remaining }
+if ($harness -eq 'openhands') {
+    # $Remaining is non-empty here: a task is required, and the refusal for a
+    # missing one is up with the other contradictions, before the shared gateway
+    # is touched.
+    #
+    # run-openhands.sh is the one stable interface in front of a CLI that has
+    # already changed shape once upstream, and it takes a model id litellm can
+    # resolve. Get-LitellmModelId adds the transport prefix; the adapter refuses
+    # anything it cannot resolve rather than repairing it, so both halves of
+    # that contract are load-bearing.
+    $runArgs += @('run-openhands.sh', (Get-LitellmModelId $Model)) + $Remaining
+} else {
+    # -Model has to reach opencode whether or not there are other arguments.
+    # Gating the whole branch on $Remaining, as this did when opencode was the
+    # only harness, would silently drop the model on a bare `cranopener -Model
+    # provider-b/...` and start opencode on whatever its config names -- a wrong
+    # answer wearing a right one's clothes.
+    $openArgs = @()
+    if ($Remaining) { $openArgs += $Remaining }
+    if ($Model) { $openArgs += @('--model', $Model) }
+    if ($openArgs) { $runArgs += @('opencode') + $openArgs }
+}
 
 podman @runArgs
 exit $LASTEXITCODE

@@ -452,6 +452,53 @@ Assert-Eq 'surrounding whitespace does not route to the wrong harness' `
 Assert-Eq 'the override replaces the default rather than adding to it' `
     'opencode' (Get-HarnessForModel 'provider-a/m' -PromptModeNamespaces @('provider-z'))
 
+# --- Get-LitellmModelId ----------------------------------------------------
+# Two names that are easy to conflate. The gateway's model id is what the
+# operator types and what LiteLLM matches its model_list on; the transport
+# prefix is what the litellm client needs in order to know how to dial. Getting
+# the second wrong is the quietest failure in this project -- litellm gives up
+# before opening a socket, so the harness makes zero requests, reports nothing,
+# and exits 0.
+
+Assert-Eq 'a gateway model id gains the transport prefix' `
+    'openai/provider-a/some-model' (Get-LitellmModelId 'provider-a/some-model')
+
+# The property that actually matters, expressed the way litellm evaluates it:
+# it splits on the FIRST '/', and everything after that split is the model name
+# that reaches the wire. It has to be the gateway's model_name character for
+# character, or LiteLLM matches nothing.
+$prefixed = Get-LitellmModelId 'provider-a/some-model'
+Assert-Eq 'what follows the first separator is the untouched gateway id' `
+    'provider-a/some-model' $prefixed.Substring($prefixed.IndexOf('/') + 1)
+
+Assert-Eq 'surrounding whitespace is trimmed rather than prefixed' `
+    'openai/provider-a/m' (Get-LitellmModelId '  provider-a/m  ')
+
+# A model_list entry named openai/... is an ordinary thing to write. Treating
+# such an id as already prefixed would send 'gpt-x' where the gateway is
+# listening for 'openai/gpt-x', and the model-not-found that comes back reads
+# as a broken gateway rather than as a mangled argument.
+Assert-Eq 'an id that already looks prefixed is prefixed anyway' `
+    'openai/openai/gpt-x' (Get-LitellmModelId 'openai/gpt-x')
+
+Assert-Eq 'the transport is a parameter rather than a literal' `
+    'custom/provider-a/m' (Get-LitellmModelId 'provider-a/m' -Transport 'custom')
+
+# A bare 'openai/' is the failure this function exists to prevent, handed to the
+# harness in a form that looks well-formed. Throwing is the only safe answer:
+# there is no model to run, and a run that sends nothing exits 0.
+$threw = $false
+try { Get-LitellmModelId '' | Out-Null } catch { $threw = $true }
+Assert-Eq 'an empty model throws rather than yielding a bare prefix' $true $threw
+
+$threw = $false
+try { Get-LitellmModelId $null | Out-Null } catch { $threw = $true }
+Assert-Eq 'a null model throws rather than yielding a bare prefix' $true $threw
+
+$threw = $false
+try { Get-LitellmModelId '   ' | Out-Null } catch { $threw = $true }
+Assert-Eq 'a whitespace-only model throws rather than yielding a bare prefix' $true $threw
+
 Write-Host ''
 Write-Host "test-launcher.ps1: $script:Run run, $script:Failed failed"
 if ($script:Failed -gt 0) { exit 1 }
