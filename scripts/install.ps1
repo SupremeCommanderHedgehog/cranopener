@@ -200,19 +200,35 @@ Write-Host '     The gateway sets SSL_CERT_FILE to it, which REPLACES the defaul
 Write-Host '     trust store rather than adding to it -- so this file must contain'
 Write-Host '     the system roots as well as any corporate roots, or every upstream'
 Write-Host '     call fails looking like a provider outage. To build one:'
-# --entrypoint cat, before the image name, and on one line. The image's
-# entrypoint is litellm itself, so `podman run IMAGE cat ...` is parsed as a
-# litellm subcommand and exits 2 -- while the redirect has already truncated
-# the target to zero bytes, manufacturing exactly the empty bundle the check
-# in cranopener.ps1 exists to catch. A bash-style `\` continuation is wrong
-# here too: this text is read at a PowerShell prompt, where `\` is not a line
-# continuation, so the command is printed unwrapped.
-Write-Host "       podman run --rm --entrypoint cat ghcr.io/berriai/litellm:main-stable /etc/ssl/certs/ca-certificates.crt > `"$Destination\certs\extra-roots.pem`""
-Write-Host "       Get-Content your-corporate-roots.pem >> `"$Destination\certs\extra-roots.pem`""
-Write-Host '     Then check the result is real, because the redirect leaves a file'
-Write-Host '     behind even when the command fails -- expect roughly 200KB, and'
-Write-Host '     treat anything under a few KB as a captured error message:'
-Write-Host "       (Get-Item `"$Destination\certs\extra-roots.pem`").Length"
+# Both commands write the bundle from inside the container, through a bind
+# mount, so no host shell ever touches the bytes. That is the point, not a
+# stylistic preference: every redirect-based form of this instruction has a
+# silent failure mode.
+#
+#   `podman run IMAGE cat ...` -- the image entrypoint is litellm, so the
+#   arguments parse as a subcommand and it exits 2, while the redirect has
+#   already truncated the target to zero bytes.
+#
+#   `... > file` under Windows PowerShell 5.1 -- 5.1 writes UTF-16LE. OpenSSL
+#   then reads ZERO certificates from a ~435KB file that is non-empty, is
+#   plausibly sized, and whose first line even reads correctly through
+#   Get-Content, because PowerShell decodes the BOM back to text. It defeats
+#   the emptiness check in cranopener.ps1 and every size heuristic.
+#
+# A bash-style `\` continuation would be wrong here too: this text is read at
+# a PowerShell prompt, where `\` does not continue a line. Printed unwrapped.
+$certsMount = "$(ConvertTo-PodmanPath $Destination)/certs"
+Write-Host "       podman run --rm -v `"${certsMount}:/out`" --entrypoint cp ghcr.io/berriai/litellm:main-stable /etc/ssl/certs/ca-certificates.crt /out/extra-roots.pem"
+Write-Host '     To add corporate roots, place them beside it as'
+Write-Host '     corporate-roots.pem and build both halves in one pass instead,'
+Write-Host '     so the concatenation also happens inside the container:'
+Write-Host "       podman run --rm -v `"${certsMount}:/out`" --entrypoint sh ghcr.io/berriai/litellm:main-stable -c `"cat /etc/ssl/certs/ca-certificates.crt /out/corporate-roots.pem > /out/extra-roots.pem`""
+Write-Host '     Do not build this file with a `>` redirect from a PowerShell'
+Write-Host '     prompt. Confirm the bytes really are PEM -- this prints True or'
+Write-Host '     False, and works the same in powershell.exe and pwsh. Reading the'
+Write-Host '     first line as text is NOT enough: it reports success on a UTF-16'
+Write-Host '     file that contains no usable certificates at all.'
+Write-Host "       [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes(`"$Destination\certs\extra-roots.pem`"), 0, 27) -eq '-----BEGIN CERTIFICATE-----'"
 Write-Host "  4. edit $Destination\opencode\opencode.proxied.json so its model"
 Write-Host '     IDs match the ones in config.yaml'
 Write-Host "  5. add the scripts directory to PATH so `cranopener` resolves"
