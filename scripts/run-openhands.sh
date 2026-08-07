@@ -200,6 +200,12 @@ mkfifo "$FIFO"
 
 HARNESS_PID=""
 
+# Invoked by the `trap cleanup EXIT` four lines down, which shellcheck's
+# reachability analysis does not follow. Both codes name the same false
+# positive and both are needed: 0.11 reports SC2329 against the definition,
+# 0.10 reports SC2317 against each statement in the body. Dropping either one
+# leaves the suite red on one of the two machines that run it.
+# shellcheck disable=SC2317,SC2329
 cleanup() {
   if [ -n "$HARNESS_PID" ] && kill -0 "$HARNESS_PID" 2>/dev/null; then
     kill -TERM "$HARNESS_PID" 2>/dev/null

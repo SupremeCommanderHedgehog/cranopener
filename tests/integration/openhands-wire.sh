@@ -24,7 +24,11 @@
 # test data copied out of a recorded request body, not a dialect this
 # repository parses -- see the header in that file.
 set -uo pipefail
-cd "$(dirname "$0")/../.."
+# Fatal: the fixture, the stub server and the record directories below are all
+# repo-relative. A run that started in the wrong tree would fail at the stub and
+# read as a harness fault, on the machine where a rerun costs a 6GB image.
+cd "$(dirname "$0")/../.." || { echo "${0##*/}: cannot reach the repository root" >&2; exit 1; }
+# shellcheck source=tests/lib/assert.sh
 . tests/lib/assert.sh
 
 IMAGE="${CRANOPENER_IMAGE:-ghcr.io/supremecommanderhedgehog/cranopener:latest}"
@@ -78,8 +82,8 @@ start_fake() {
   # build host -- where the failure is a connection refused that reads as a
   # harness fault -- or wasted time on every run. /dev/tcp keeps this free of
   # curl, which is not everywhere.
-  local i
-  for i in $(seq 1 50); do
+  local _
+  for _ in $(seq 1 50); do
     if (exec 3<>"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null; then
       exec 3>&- 2>/dev/null
       return 0
@@ -119,7 +123,15 @@ run_harness() {
 }
 
 count_requests() {
-  ls -1 "$1"/req-*.json 2>/dev/null | wc -l | tr -d ' '
+  # Counted by glob rather than `ls | wc -l`: the count feeds a `-ge 4`
+  # assertion, and a pipeline that miscounts here reports a conversation that
+  # never happened as four healthy turns. nullglob is what makes an empty
+  # directory count 0 instead of 1 for the unexpanded pattern.
+  local -a files
+  shopt -s nullglob
+  files=( "$1"/req-*.json )
+  shopt -u nullglob
+  echo "${#files[@]}"
 }
 
 count_with_tools() {

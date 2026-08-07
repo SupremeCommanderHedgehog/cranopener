@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -uo pipefail
-cd "$(dirname "$0")/.."
+# Fatal: scripts/seed-config.sh is invoked by a repo-relative path below, so a
+# failed cd turns every case into the same "no such file" rather than a result.
+cd "$(dirname "$0")/.." || { echo "${0##*/}: cannot reach the repository root" >&2; exit 1; }
 # shellcheck source=tests/lib/assert.sh
 . tests/lib/assert.sh
 

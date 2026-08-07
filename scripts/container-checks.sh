@@ -39,6 +39,12 @@ check "rustc present"          rustc --version
 check "cargo present"          cargo --version
 check "cargo toolchain not world-writable" \
   sh -c 'test ! -w /usr/local/cargo/bin/cargo'
+# The single quotes are the check. $CARGO_HOME must be resolved by the shell
+# that runs inside the image, from the image's own environment. Double quotes
+# would expand it here instead, testing whatever value this script's shell holds
+# -- empty, in the normal case, which makes `test -w ""` fail and reports a
+# correctly configured image as broken.
+# shellcheck disable=SC2016
 check "user cargo home is writable"        \
   sh -c 'test -w "$CARGO_HOME"'
 check "dotnet present"         dotnet --version

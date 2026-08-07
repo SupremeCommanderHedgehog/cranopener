@@ -21,7 +21,13 @@ WORK="$(mktemp -d)"
 SERVER_PID=""
 
 cleanup() {
-  [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null || true
+  # Spelled out rather than `[ -n ... ] && kill ... || true`: in that form the
+  # `|| true` also swallows a failure of the test, so an empty SERVER_PID and a
+  # kill that failed are indistinguishable. Under `set -e` the difference is
+  # whether the rm below runs at all.
+  if [ -n "$SERVER_PID" ]; then
+    kill "$SERVER_PID" 2>/dev/null || true
+  fi
   rm -rf "$WORK"
 }
 trap cleanup EXIT

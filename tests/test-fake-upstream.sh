@@ -4,7 +4,10 @@
 # background server to leak, and no inline `python3 -c` for Defender to score
 # as a downloader.
 set -uo pipefail
-cd "$(dirname "$0")/.."
+# Fatal: the fixtures below are repo-relative, and assertions run against a tree
+# that does not hold them fail in ways that read like a broken fixture.
+cd "$(dirname "$0")/.." || { echo "${0##*/}: cannot reach the repository root" >&2; exit 1; }
+# shellcheck source=tests/lib/assert.sh
 . tests/lib/assert.sh
 
 assert_ok 'the fake upstream behaves as specified' \

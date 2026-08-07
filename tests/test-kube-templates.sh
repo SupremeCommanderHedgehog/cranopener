@@ -6,7 +6,10 @@
 # Windows host. python3 covers both YAML and JSON rather than adding jq as a
 # second prerequisite -- the value of this file is that it runs everywhere.
 set -uo pipefail
-cd "$(dirname "$0")/.."
+# Fatal: every template path below is repo-relative, and several assertions are
+# greps for a string being absent -- which a missing file satisfies trivially.
+cd "$(dirname "$0")/.." || { echo "${0##*/}: cannot reach the repository root" >&2; exit 1; }
+# shellcheck source=tests/lib/assert.sh
 . tests/lib/assert.sh
 
 if ! python3 -c 'import yaml' >/dev/null 2>&1; then
