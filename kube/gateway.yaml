@@ -5,9 +5,18 @@
 # __CRANOPENER_GATEWAY_ENV__ line with an env block built from its own
 # environment and pipes the result to `podman kube play -`.
 #
-# Credentials are never written to disk. `kind: Secret` is deliberately not
-# used: podman's secret store driver is `file`, and the plaintext outlives the
-# session until someone runs `podman secret rm`.
+# `kind: Secret` is deliberately not used: podman's secret store driver is
+# `file`, so the plaintext lands on disk and outlives the session until someone
+# runs `podman secret rm`.
+#
+# Do not read that as "the credentials are never on disk" -- they are not
+# secret from the host either. podman records a container's environment in its
+# state inside the machine, and `podman inspect cranopener-gateway-litellm`
+# prints these values in plaintext for anyone who can reach the podman socket.
+# What the choice buys is lifetime, not secrecy: these die with the pod. That
+# is why the gateway is worth bringing down (`cranopener -Down`) when you
+# finish for the day rather than leaving a shared, long-lived pod holding live
+# provider credentials.
 #
 # __CRANOPENER_HOME__ is replaced at install time with a VM-side path
 # (/mnt/c/...). hostPath resolves inside the podman machine, not on Windows --

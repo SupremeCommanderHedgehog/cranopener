@@ -12,9 +12,17 @@
 
 .PARAMETER Direct
   Bypass the gateway and use opencode's stock providers. No pod is involved.
+  Cannot be combined with -Down, which always acts on the shared gateway.
 
 .PARAMETER Down
-  Stop and remove the shared gateway, then exit.
+  Stop and remove the shared gateway, then exit. This always targets the
+  shared gateway, whatever directory it is run from.
+
+  Worth running when you finish for the day. The gateway holds the real
+  provider credentials for every project, and it is shared and long-lived by
+  design, so leaving it up keeps those credentials live in a container whose
+  environment `podman inspect` prints in plaintext. Do not leave it running
+  indefinitely across projects you are no longer working in.
 
 .EXAMPLE
   cranopener
@@ -66,7 +74,22 @@ $project   = ConvertTo-ProjectName $here
 
 Write-Host "cranopener: $project -> $workspace" -ForegroundColor DarkGray
 
+# -Direct promises no pod is involved and -Down acts only on the pod, so the
+# combination asks for two contradictory things. Silently honouring one of
+# them would tear down a gateway other projects are using on behalf of someone
+# who asked not to touch it.
+if ($Down -and $Direct) {
+    throw '-Direct and -Down cannot be combined: -Down always acts on the shared gateway, and -Direct means no gateway is involved. Run cranopener -Down on its own to stop it.'
+}
+
 if ($Down) {
+    # Validated here rather than by the $required loop below, which -Down
+    # returns before reaching. Without this a Direct-only or half-finished
+    # install gets podman's raw "no such file" naming a path the user never
+    # typed, instead of a message that says what to do about it.
+    if (-not (Test-Path $GatewayYaml)) {
+        throw "missing $GatewayYaml, so there is no gateway to bring down -- see the next steps printed by install.ps1"
+    }
     # The gateway is shared, so this is not a per-project operation. Say so
     # before doing it -- `kube down` removes the pod along with any agent
     # container joined to it, including another project's live session.
@@ -94,7 +117,36 @@ foreach ($rel in $required) {
     throw "$p is empty."
 }
 
+# Read the gateway container's whole state in one call, so Running and the
+# health result cannot come from two different instants. $null when there is no
+# such container.
+function Get-GatewayState {
+    $json = podman inspect --format '{{json .State}}' $GatewayCtr 2>$null
+    if ($LASTEXITCODE -ne 0 -or -not $json) { return $null }
+    return ($json | ConvertFrom-Json)
+}
+
+# The start time of the most recent health probe, or '' if none has run. Used
+# purely as an identity to compare against a snapshot -- never parsed as a
+# time -- so a value that has changed proves a probe ran since the snapshot.
+function Get-LastProbe($state) {
+    if ($null -eq $state -or $null -eq $state.Health -or -not $state.Health.Log) { return '' }
+    return [string]$state.Health.Log[-1].Start
+}
+
 if (-not $Direct) {
+    # Piped to `kube play` rather than passed as arguments because argv is
+    # visible in process listings. That is a real benefit but a narrow one:
+    # these values do not stay out of sight afterwards, because podman records
+    # a container's environment in its state inside the machine, where `podman
+    # inspect cranopener-gateway-litellm` prints them in plaintext. What this
+    # buys over `kind: Secret` is lifetime, not secrecy -- these die with the
+    # pod, a secret persists until someone runs `podman secret rm`.
+    $passthrough = @(
+        'PROVIDER_A_API_KEY', 'PROVIDER_B_API_KEY', 'PROVIDER_C_API_KEY',
+        'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY'
+    )
+
     podman pod exists $PodName 2>$null
     $podExists = ($LASTEXITCODE -eq 0)
 
@@ -110,14 +162,37 @@ if (-not $Direct) {
         }
     }
 
+    $freshPod      = $false
+    $startedNow    = $false
+    $probeBaseline = ''
+
+    if ($podExists) {
+        # Existence is not liveness. `podman pod exists` returns 0 for a pod in
+        # any state, and so does `container exists`, so after a `podman machine
+        # stop`, a host reboot, or a manual `podman pod stop` every check above
+        # passes on a gateway that is not running. `compose up -d` restarted a
+        # stopped container for free; this has to do it deliberately. Starting
+        # is the only option -- replaying the manifest would fail on the pod
+        # name that already exists.
+        $state = Get-GatewayState
+        if ($null -eq $state -or -not $state.Running) {
+            # Snapshot the last probe BEFORE starting. podman does not clear
+            # .State.Health.Status when a container stops, so it goes on
+            # reading 'healthy' for a gateway that is not running; comparing
+            # against this proves the verdict the poll acts on was produced
+            # after the start, not left over from before the stop.
+            $probeBaseline = Get-LastProbe $state
+            Write-Host 'the gateway pod exists but is not running; starting it' -ForegroundColor Yellow
+            podman pod start $PodName | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+                throw "failed to start the existing $PodName pod. Check: podman logs $GatewayCtr"
+            }
+            $startedNow = $true
+        }
+    }
+
     if (-not $podExists) {
-        # Credentials come from this process's environment and are never
-        # written to disk. They are piped rather than passed as arguments
-        # because argv is visible in process listings.
-        $passthrough = @(
-            'PROVIDER_A_API_KEY', 'PROVIDER_B_API_KEY', 'PROVIDER_C_API_KEY',
-            'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY'
-        )
+        $freshPod = $true
         $values = @{}
         foreach ($n in $passthrough) {
             $values[$n] = [Environment]::GetEnvironmentVariable($n)
@@ -166,18 +241,101 @@ if (-not $Direct) {
     # surfaces as "fork/exec ... Access is denied", which reads like an
     # argument-quoting bug and is not one. Any probe the launcher runs is a
     # Windows command line and is subject to this.
-    $deadline = (Get-Date).AddSeconds(90)
+    #
+    # Two conditions, not one, because a recorded health status is not a
+    # current one. podman leaves .State.Health.Status reading 'healthy' on a
+    # container it has stopped, so on its own it would pass instantly against a
+    # dead gateway and the session would fail at the first prompt with
+    # ECONNREFUSED -- exactly what this poll exists to prevent. .State.Running
+    # is the discriminator. And where this run started the pod, the status is
+    # only believed once a probe has run since that start, so the verdict
+    # cannot be the one left over from before it stopped.
+    $deadline   = (Get-Date).AddSeconds(90)
+    $graceUntil = (Get-Date).AddSeconds(10)
     $ready = $false
+    $state = $null
     while ((Get-Date) -lt $deadline) {
-        $status = podman inspect --format '{{.State.Health.Status}}' $GatewayCtr 2>$null
-        if ($status -eq 'healthy') { $ready = $true; break }
-        if ($status -eq 'unhealthy') {
-            throw "gateway reported unhealthy. Check: podman logs $GatewayCtr"
+        $state = Get-GatewayState
+        if ($null -ne $state) {
+            # Tolerated briefly: a container podman has just been told to start
+            # may not have flipped yet. Past the grace period it means the
+            # gateway is down or crash-looping, and saying so now is far better
+            # than spending the remaining 80s to say it less clearly.
+            if (-not $state.Running -and (Get-Date) -gt $graceUntil) {
+                throw "the gateway container exists but is not running -- it may be crash-looping on a bad config. Check: podman logs $GatewayCtr"
+            }
+            if ($state.Running) {
+                $status = if ($null -eq $state.Health) { '' } else { [string]$state.Health.Status }
+                $fresh  = (-not $startedNow) -or ((Get-LastProbe $state) -ne $probeBaseline)
+                if ($fresh) {
+                    if ($status -eq 'healthy') { $ready = $true; break }
+                    if ($status -eq 'unhealthy') {
+                        throw "gateway reported unhealthy. Check: podman logs $GatewayCtr"
+                    }
+                }
+            }
         }
         Start-Sleep -Seconds 2
     }
     if (-not $ready) {
         throw "gateway did not become ready within 90s. Check: podman logs $GatewayCtr"
+    }
+
+    # A pod this run did not create carries whatever environment and config the
+    # run that created it had. Nothing here can safely fix that: the gateway is
+    # shared, so recreating it would kill another project's live session. So
+    # detect and report, and leave the decision with the operator.
+    #
+    # The cases that bite are a first run made before the credentials were
+    # exported -- which pins value: '' into a gateway every later run silently
+    # reuses -- and a rotated key that never takes effect. Both surface much
+    # later as a provider 401, which points at the credential rather than at
+    # the stale pod holding it.
+    if (-not $freshPod) {
+        $stale = @()
+
+        $envJson = podman inspect --format '{{json .Config.Env}}' $GatewayCtr 2>$null
+        if ($LASTEXITCODE -eq 0 -and $envJson) {
+            $live = @{}
+            foreach ($entry in ($envJson | ConvertFrom-Json)) {
+                $i = ([string]$entry).IndexOf('=')
+                if ($i -ge 0) {
+                    $live[([string]$entry).Substring(0, $i)] = ([string]$entry).Substring($i + 1)
+                }
+            }
+            foreach ($n in $passthrough) {
+                $want = [Environment]::GetEnvironmentVariable($n)
+                if ($null -eq $want) { $want = '' }
+                $have = if ($live.ContainsKey($n)) { $live[$n] } else { '' }
+                # Only the NAME is ever collected. These are credentials and
+                # this list gets printed.
+                if ($want -ne $have) { $stale += $n }
+            }
+        }
+
+        # config.yaml is a hostPath mount that LiteLLM reads once at startup,
+        # so an edit since then is live on disk and inert in the gateway.
+        $cfg = Join-Path $Install 'litellm/config.yaml'
+        try {
+            $startedAt = [datetimeoffset]::Parse([string]$state.StartedAt)
+            if ((Get-Item $cfg).LastWriteTimeUtc -gt $startedAt.UtcDateTime) {
+                $stale += 'litellm/config.yaml (edited since the gateway started)'
+            }
+        } catch {
+            # A timestamp we cannot read is not worth failing a session over.
+        }
+
+        if ($stale) {
+            Write-Host ''
+            Write-Host 'The running gateway does not match your current configuration:' -ForegroundColor Yellow
+            foreach ($n in $stale) { Write-Host "  $n" -ForegroundColor Yellow }
+            Write-Host 'It keeps the values it started with until it is replaced. To apply' -ForegroundColor Yellow
+            Write-Host 'the current ones (this stops the gateway for EVERY project, so do' -ForegroundColor Yellow
+            Write-Host 'not do it while another session is running):' -ForegroundColor Yellow
+            Write-Host '  cranopener -Down' -ForegroundColor Yellow
+            Write-Host '  cranopener' -ForegroundColor Yellow
+            Write-Host ''
+        }
     }
 }
 
