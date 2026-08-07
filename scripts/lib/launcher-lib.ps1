@@ -437,6 +437,57 @@ function Get-OpenHandsEnvNames {
     }
 }
 
+function Get-OpenHandsTaskObjection {
+    <#
+    .SYNOPSIS
+      Why these arguments cannot be an OpenHands task, or $null if they can.
+
+    .DESCRIPTION
+      Two failures, both of which the rest of this project makes easy to walk
+      into, and neither of which podman or the adapter can diagnose usefully
+      once the session has started.
+
+      No task at all. The adapter runs `openhands --headless -t "TASK"` and
+      there is no interactive mode on this path to fall back to.
+
+      A leading `run`. That is opencode's grammar, and every .EXAMPLE in
+      cranopener.ps1 uses it, so it is exactly what a hand reaches for. On the
+      OpenHands path there is no verb -- the adapter does TASK="$*" -- so
+      `cranopener -Model provider-a/x run "fix the thing"` becomes the task
+      `run fix the thing`. That is not a failure anyone would notice: the run
+      proceeds, spends its whole iteration budget against a corrupted
+      instruction, and reports success. Refused for the same reason -Direct
+      with a gateway-only model is refused -- the launcher can see the
+      combination is wrong, and saying so costs one line.
+
+      Deliberately not "handled" by stripping the verb. A launcher that
+      silently rewrote the operator's words would be guessing at intent, and
+      the guess is wrong for the task 'run the migration and report'. Refusing
+      names the problem and leaves the sentence to the person who meant it.
+
+      Returned as a string rather than thrown so the decision can be tested
+      without invoking the launcher, which needs podman and an install tree.
+    #>
+    param(
+        [AllowNull()][string[]]$Remaining,
+        [AllowNull()][AllowEmptyString()][string]$Model
+    )
+
+    $shown = if ([string]::IsNullOrWhiteSpace($Model)) { '<model>' } else { $Model.Trim() }
+
+    if (-not $Remaining) {
+        return "-Model $shown runs under OpenHands, which has no interactive mode here -- it needs a task. Try: cranopener -Model $shown `"fix the failing test`""
+    }
+
+    # -eq on strings is case-insensitive in PowerShell, which is what is wanted:
+    # `Run` is the same mistake as `run`.
+    if ([string]$Remaining[0] -and ([string]$Remaining[0]).Trim() -eq 'run') {
+        return "-Model $shown runs under OpenHands, which has no 'run' verb -- the whole argument list is the task, so this would run the task 'run ...' instead of the one you typed, spend its entire iteration budget on it, and report success. 'run' is opencode's verb and belongs only to models that use opencode. Drop it: cranopener -Model $shown `"fix the failing test`""
+    }
+
+    return $null
+}
+
 function Get-LitellmModelId {
     <#
     .SYNOPSIS

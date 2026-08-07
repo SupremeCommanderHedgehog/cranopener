@@ -639,6 +639,60 @@ $launcherText = Get-Content "$PSScriptRoot/../scripts/cranopener.ps1" -Raw
 Assert-Eq 'the launcher forwards the declared list rather than a literal one' `
     $true ($launcherText -match '\(Get-OpenHandsEnvNames\)\.Forward')
 
+# --- Get-OpenHandsTaskObjection --------------------------------------------
+# Every .EXAMPLE in cranopener.ps1 used to reach for opencode's `run` verb, and
+# the OpenHands path has no verb: the adapter does TASK="$*", so `run` becomes
+# the first word of the prompt. The run then proceeds, spends its whole
+# iteration budget against an instruction nobody wrote, and reports success --
+# which at a monthly-visit site costs a month and the tokens both.
+
+Assert-Eq 'a plain task is accepted' `
+    $null (Get-OpenHandsTaskObjection -Remaining @('fix the failing test') -Model 'provider-a/m')
+
+Assert-Eq 'several plain words are accepted' `
+    $null (Get-OpenHandsTaskObjection -Remaining @('fix', 'the', 'test') -Model 'provider-a/m')
+
+Assert-Eq 'no arguments at all is objected to' `
+    $true ((Get-OpenHandsTaskObjection -Remaining @() -Model 'provider-a/m') -match 'needs a task')
+
+Assert-Eq 'a null argument list is objected to' `
+    $true ((Get-OpenHandsTaskObjection -Remaining $null -Model 'provider-a/m') -match 'needs a task')
+
+# The finding itself.
+$verbObjection = Get-OpenHandsTaskObjection -Remaining @('run', 'fix the thing') -Model 'provider-a/m'
+Assert-Eq 'a leading run verb is objected to' `
+    $true ($null -ne $verbObjection)
+
+Assert-Eq 'the objection says what is wrong with it' `
+    $true ($verbObjection -match "no 'run' verb")
+
+Assert-Eq 'the objection shows the corrected form' `
+    $true ($verbObjection -match 'cranopener -Model provider-a/m "fix the failing test"')
+
+Assert-Eq 'the verb alone, with no task after it, is objected to' `
+    $true ($null -ne (Get-OpenHandsTaskObjection -Remaining @('run') -Model 'provider-a/m'))
+
+# Muscle memory does not respect case, and neither does the shell's history.
+Assert-Eq 'the verb check is case-insensitive' `
+    $true ($null -ne (Get-OpenHandsTaskObjection -Remaining @('Run', 'fix it') -Model 'provider-a/m'))
+
+# The two cases that must NOT be refused, because refusing them would make the
+# check worse than the bug: a task that happens to begin with the word run, and
+# a word that merely starts with it.
+Assert-Eq 'a quoted task beginning with the word run is accepted' `
+    $null (Get-OpenHandsTaskObjection -Remaining @('run the migration and report') -Model 'provider-a/m')
+
+Assert-Eq 'a longer word sharing the prefix is not the verb' `
+    $null (Get-OpenHandsTaskObjection -Remaining @('runbook', 'the deploy') -Model 'provider-a/m')
+
+# The message is what the operator acts on, so it has to name their model.
+Assert-Eq 'the objection names the model that caused it' `
+    $true ((Get-OpenHandsTaskObjection -Remaining @() -Model 'provider-a/some-model') -match 'provider-a/some-model')
+
+# The launcher must ask this function rather than re-implementing the checks.
+Assert-Eq 'the launcher asks for the objection rather than duplicating it' `
+    $true ($launcherText -match 'Get-OpenHandsTaskObjection')
+
 Write-Host ''
 Write-Host "test-launcher.ps1: $script:Run run, $script:Failed failed"
 if ($script:Failed -gt 0) { exit 1 }

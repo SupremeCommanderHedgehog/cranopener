@@ -44,9 +44,21 @@
 .EXAMPLE
   cranopener
   cranopener -Direct
-  cranopener run "fix the failing test"
-  cranopener -Model provider-a/some-model "fix the failing test"
   cranopener -Down
+
+.EXAMPLE
+  cranopener run "fix the failing test"
+
+  `run` is opencode's verb, and it belongs only to models that run under
+  opencode.
+
+.EXAMPLE
+  cranopener -Model provider-a/some-model "fix the failing test"
+
+  No verb. A provider-A model runs under OpenHands, where the whole argument
+  list is the task -- `run` would silently become the first word of the prompt,
+  so the launcher refuses it rather than spending a full iteration budget on a
+  corrupted instruction and reporting success.
 #>
 # PositionalBinding = $false, and it is load-bearing. Parameters are positional
 # by default in declaration order, so a plain [string]$Model silently claims
@@ -126,14 +138,21 @@ if ($Direct -and $harness -eq 'openhands') {
     throw "-Direct cannot be used with -Model $Model. That model is served only by the gateway, and -Direct bypasses the gateway entirely, so there is nothing to reach. Drop -Direct to run it through the gateway, or name a model your stock providers serve."
 }
 
-# There is no interactive mode to fall back to on this path: the adapter runs
-# `openhands --headless -t "TASK"`, which needs a task. Refused up here with the
-# other contradiction rather than at the point of use, because everything
-# between the two starts a gateway pod that is shared with every other project.
-# Bringing that up for a session that was never going to run is a slow way to
-# say no, and on a machine with no engine it is a 90-second way.
-if ($harness -eq 'openhands' -and -not $Remaining) {
-    throw "-Model $Model runs under OpenHands, which has no interactive mode here -- it needs a task. Try: cranopener -Model $Model `"fix the failing test`""
+# The task itself, checked up here with the other contradictions rather than at
+# the point of use: everything between the two starts a gateway pod shared with
+# every other project, and bringing that up for a session that was never going
+# to run is a slow way to say no -- on a machine with no engine, a 90-second
+# way.
+#
+# Two objections, and the second is the one that costs money. There is no
+# interactive mode on this path, so a missing task is unrunnable; and there is
+# no verb either, so the `run` that every opencode example above builds into the
+# hand would be absorbed into the prompt and the run would proceed against an
+# instruction nobody wrote. The decision is in launcher-lib.ps1 so
+# test-launcher.ps1 can pin it without podman.
+if ($harness -eq 'openhands') {
+    $objection = Get-OpenHandsTaskObjection -Remaining $Remaining -Model $Model
+    if ($objection) { throw $objection }
 }
 
 if ($Down) {

@@ -103,8 +103,14 @@ never owns one.
 ```powershell
 cranopener                                        # opencode, whatever its config names
 cranopener -Model provider-b/a-model run "..."    # opencode, explicit model
-cranopener -Model provider-a/a-model "fix the failing test"   # OpenHands
+cranopener -Model provider-a/a-model "fix the failing test"   # OpenHands, NO verb
 ```
+
+Note the missing `run` on the last line. It is opencode's verb, and the
+OpenHands path has none — the whole argument list is the task, so `run` would
+become the first word of the prompt and the session would spend its entire
+iteration budget on an instruction nobody wrote, then report success. The
+launcher refuses that combination rather than absorbing it.
 
 `-Model` takes the model id as the gateway names it, and the harness follows
 from that id. There is no flag to pick one, because a flag can be set to
