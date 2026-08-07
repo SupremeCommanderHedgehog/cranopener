@@ -110,11 +110,29 @@ foreach ($rel in $required) {
     if (-not (Test-Path $p)) {
         throw "missing $p -- see the next steps printed by install.ps1"
     }
-    if ((Get-Item $p).Length -gt 0) { continue }
-    if ($rel -eq 'certs/extra-roots.pem') {
-        throw "$p is empty. It must be a COMPLETE CA bundle -- system roots plus any corporate roots. SSL_CERT_FILE replaces the default trust store rather than adding to it, so an empty bundle means the gateway trusts nothing and every upstream call fails looking like a provider outage."
+    if ((Get-Item $p).Length -eq 0) {
+        if ($rel -eq 'certs/extra-roots.pem') {
+            throw "$p is empty. It must be a COMPLETE CA bundle -- system roots plus any corporate roots. SSL_CERT_FILE replaces the default trust store rather than adding to it, so an empty bundle means the gateway trusts nothing and every upstream call fails looking like a provider outage."
+        }
+        throw "$p is empty."
     }
-    throw "$p is empty."
+
+    if ($rel -ne 'certs/extra-roots.pem') { continue }
+
+    # Non-empty is not the same as usable, and both ways this has actually gone
+    # wrong produce a plausible-looking file that the size check waves through:
+    # a shell redirect capturing an error message, and Windows PowerShell 5.1's
+    # `>` writing UTF-16LE (a 435KB bundle from which OpenSSL reads zero
+    # certificates). Either one fails later at TLS handshake, which presents as
+    # a provider outage rather than a broken file.
+    #
+    # Read raw bytes rather than text: PowerShell decodes the UTF-16 BOM and
+    # hands back a perfectly clean "-----BEGIN CERTIFICATE-----", so a
+    # text-level check reports success on a bundle with no trust anchors.
+    $head = [System.IO.File]::ReadAllBytes($p)[0..26]
+    if ([System.Text.Encoding]::ASCII.GetString($head) -ne '-----BEGIN CERTIFICATE-----') {
+        throw "$p does not begin with -----BEGIN CERTIFICATE-----. It is not a usable PEM bundle: a UTF-16 file (Windows PowerShell's `>` writes UTF-16LE) or captured error text both land here. Rebuild it with the command install.ps1 prints."
+    }
 }
 
 # Read the gateway container's whole state in one call, so Running and the
