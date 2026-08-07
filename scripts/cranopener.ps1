@@ -29,6 +29,12 @@
   e.g. provider-a/some-model. Omitted, opencode runs with whatever its own
   config selects.
 
+  Always the gateway's name for it, never a harness's. Each harness needs the
+  id in its own dialect -- litellm wants a transport prefix, opencode wants its
+  provider id -- and both are added here, so the same string works for either.
+  With -Direct there is no gateway, so the model is whatever opencode's own
+  stock providers call it: anthropic/some-model.
+
   This also selects the harness: a provider-A model runs under OpenHands,
   everything else under opencode. Deliberately not a separate flag. A flag can
   be set to contradict the model, and opencode against a provider that refuses
@@ -536,7 +542,14 @@ if ($harness -eq 'openhands') {
     # answer wearing a right one's clothes.
     $openArgs = @()
     if ($Remaining) { $openArgs += $Remaining }
-    if ($Model) { $openArgs += @('--model', $Model) }
+    # Qualified, not passed through. opencode splits a model id on the first
+    # '/' to pick a provider, so the gateway id it is given here would be read
+    # as provider 'provider-b' with model 'PLACEHOLDER-MODEL' -- neither of
+    # which exists. Measured: the bare form exits 1 with "Unexpected server
+    # error" having sent zero requests, which points at the gateway rather than
+    # at the argument. Get-OpencodeModelId leaves -Direct alone, where the
+    # operator names a stock provider themselves.
+    if ($Model) { $openArgs += @('--model', (Get-OpencodeModelId $Model -Direct:$Direct)) }
     if ($openArgs) { $runArgs += @('opencode') + $openArgs }
 }
 

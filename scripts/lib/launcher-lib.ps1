@@ -416,3 +416,61 @@ function Get-LitellmModelId {
     # the gateway is asked to match.
     return "$Transport/$($Model.Trim())"
 }
+
+function Get-OpencodeModelId {
+    <#
+    .SYNOPSIS
+      Render a gateway model id as an argument opencode can resolve.
+
+    .DESCRIPTION
+      The same two-names problem as Get-LitellmModelId, one layer out. opencode
+      identifies a model as '<provider id>/<model key>' and splits on the FIRST
+      '/' to pick the provider, so the gateway id 'provider-b/PLACEHOLDER-MODEL'
+      passed through untouched is read as provider 'provider-b' with model
+      'PLACEHOLDER-MODEL' -- and neither exists. The gateway is not an opencode
+      provider; it is reached through the one opencode.proxied.json declares,
+      whose `models` map is keyed by the full gateway id.
+
+      This was measured, both forms, against the image with a stub endpoint
+      recording every request:
+
+        --model provider-b/PLACEHOLDER-MODEL
+            exit 1, "UnknownError: Unexpected server error", ZERO requests sent
+        --model cranopener/provider-b/PLACEHOLDER-MODEL
+            exit 0, endpoint received model='provider-b/PLACEHOLDER-MODEL'
+
+      The failing form is loud, which is the one merciful thing about it, but
+      "Unexpected server error" points at the gateway rather than at the
+      argument, and the gateway is the expensive place to go looking.
+
+      -Direct is the exception and not a special case: it means no gateway is
+      involved and opencode uses its own stock providers, where the operator has
+      already named one ('anthropic/some-model'). Qualifying that would invent a
+      provider that does not exist.
+
+      Always prefixed otherwise, never conditionally, for the reason spelled out
+      in Get-LitellmModelId: a gateway model legitimately named 'cranopener/...'
+      would otherwise be sent as a model key its provider does not have.
+
+    .PARAMETER ProviderId
+      The provider key in opencode.proxied.json. A parameter rather than a
+      literal so test-launcher.ps1 can read the shipped config and assert the
+      default still matches it -- a rename there is otherwise invisible until
+      every proxied run fails naming a provider opencode has never heard of.
+    #>
+    param(
+        [AllowNull()][AllowEmptyString()][string]$Model,
+        [switch]$Direct,
+        [string]$ProviderId = 'cranopener'
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Model)) {
+        throw "Get-OpencodeModelId: no model to qualify. opencode resolves the provider from the leading segment of the model id, so a bare '$ProviderId/' names no model at all and the run fails before it sends anything."
+    }
+
+    $Model = $Model.Trim()
+
+    if ($Direct) { return $Model }
+
+    return "$ProviderId/$Model"
+}

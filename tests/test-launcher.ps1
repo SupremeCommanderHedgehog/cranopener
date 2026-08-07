@@ -499,6 +499,77 @@ $threw = $false
 try { Get-LitellmModelId '   ' | Out-Null } catch { $threw = $true }
 Assert-Eq 'a whitespace-only model throws rather than yielding a bare prefix' $true $threw
 
+# --- Get-OpencodeModelId ---------------------------------------------------
+# The same two-names confusion as Get-LitellmModelId, one layer out, and it was
+# wrong here until it was measured. opencode names a model
+# `<its own provider id>/<the model key>`, splitting on the FIRST '/' exactly as
+# litellm does -- so the gateway id 'provider-b/PLACEHOLDER-MODEL', passed
+# through untouched, is read as provider 'provider-b', model
+# 'PLACEHOLDER-MODEL', and neither exists.
+#
+# Measured against the image, both forms, with a stub endpoint recording every
+# request: the bare form exits 1 with "UnknownError: Unexpected server error"
+# and sends ZERO requests; the qualified form exits 0 and the endpoint receives
+# model='provider-b/PLACEHOLDER-MODEL'. The provider prefix is not decoration.
+
+Assert-Eq 'a gateway model id gains the opencode provider prefix' `
+    'cranopener/provider-b/PLACEHOLDER-MODEL' `
+    (Get-OpencodeModelId 'provider-b/PLACEHOLDER-MODEL')
+
+# The property that matters, expressed the way opencode evaluates it. What
+# follows the first separator is looked up in that provider's `models` map, so
+# it has to be the gateway id character for character.
+$qualified = Get-OpencodeModelId 'provider-b/PLACEHOLDER-MODEL'
+Assert-Eq 'what follows the first separator is the untouched gateway id' `
+    'provider-b/PLACEHOLDER-MODEL' $qualified.Substring($qualified.IndexOf('/') + 1)
+
+# -Direct means the gateway is not involved and opencode uses its own stock
+# providers, where the operator already names one -- 'anthropic/some-model'.
+# Prefixing there would invent a provider that does not exist.
+Assert-Eq 'a direct-mode model keeps whatever provider it names' `
+    'anthropic/some-model' (Get-OpencodeModelId 'anthropic/some-model' -Direct)
+
+Assert-Eq 'surrounding whitespace is trimmed rather than prefixed' `
+    'cranopener/provider-b/m' (Get-OpencodeModelId '  provider-b/m  ')
+
+Assert-Eq 'surrounding whitespace is trimmed in direct mode too' `
+    'anthropic/some-model' (Get-OpencodeModelId '  anthropic/some-model  ' -Direct)
+
+# Same argument as Get-LitellmModelId: a gateway model_list entry named
+# 'cranopener/...' is an ordinary thing for an operator to write, and treating
+# it as already qualified would send a model key that provider does not have.
+Assert-Eq 'an id that already looks qualified is qualified anyway' `
+    'cranopener/cranopener/m' (Get-OpencodeModelId 'cranopener/m')
+
+Assert-Eq 'the provider id is a parameter rather than a literal' `
+    'other/provider-b/m' (Get-OpencodeModelId 'provider-b/m' -ProviderId 'other')
+
+$threw = $false
+try { Get-OpencodeModelId '' | Out-Null } catch { $threw = $true }
+Assert-Eq 'an empty model throws rather than yielding a bare prefix' $true $threw
+
+$threw = $false
+try { Get-OpencodeModelId $null | Out-Null } catch { $threw = $true }
+Assert-Eq 'a null model throws rather than yielding a bare prefix' $true $threw
+
+$threw = $false
+try { Get-OpencodeModelId '   ' | Out-Null } catch { $threw = $true }
+Assert-Eq 'a whitespace-only model throws rather than yielding a bare prefix' $true $threw
+
+# The default provider id is only correct while it matches the installed
+# config, and nothing else in this repository ties the two together. A rename
+# in the JSON would leave every proxied run naming a provider opencode has
+# never heard of -- which fails before a single request is sent, so the gateway
+# looks fine and the model looks wrong.
+$proxied = Get-Content "$PSScriptRoot/../kube/opencode/opencode.proxied.json" -Raw |
+           ConvertFrom-Json
+$configuredProvider = ($proxied.provider.PSObject.Properties | Select-Object -First 1).Name
+$configuredModel    = ($proxied.provider.$configuredProvider.models.PSObject.Properties |
+                       Select-Object -First 1).Name
+
+Assert-Eq 'the default provider id is the one the proxied config declares' `
+    "$configuredProvider/$configuredModel" (Get-OpencodeModelId $configuredModel)
+
 Write-Host ''
 Write-Host "test-launcher.ps1: $script:Run run, $script:Failed failed"
 if ($script:Failed -gt 0) { exit 1 }
