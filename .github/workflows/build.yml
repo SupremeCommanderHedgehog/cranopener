@@ -9,6 +9,10 @@ on:
         description: "Pin a specific opencode version (blank = latest)"
         required: false
         type: string
+  # spike/** is here for the lint alone: it ships no image content, but
+  # test-shellcheck.sh covers every tracked *.sh, so a defect introduced there
+  # would otherwise land green and surface on whatever unrelated change happened
+  # to touch a path in this list next.
   push:
     branches: [main]
     paths:
@@ -16,6 +20,7 @@ on:
       - config/**
       - kube/**
       - scripts/**
+      - spike/**
       - tests/**
       - .github/workflows/**
   pull_request:
@@ -24,6 +29,7 @@ on:
       - config/**
       - kube/**
       - scripts/**
+      - spike/**
       - tests/**
       - .github/workflows/**
 
@@ -50,6 +56,12 @@ jobs:
         run: jq --version
       - name: Assert PyYAML is available
         run: python3 -c 'import yaml'
+      # Preinstalled on ubuntu-latest. Asserted because test-shellcheck.sh
+      # skips rather than fails when it is missing, and this job is the only
+      # place the lint is guaranteed to actually run — a local machine may or
+      # may not have it, and the runner image could drop it without notice.
+      - name: Assert shellcheck is available
+        run: shellcheck --version
       - name: Run shell unit tests
         run: bash tests/run-all.sh
       # run-all.sh globs tests/test-*.sh, so the PowerShell tests are invisible
