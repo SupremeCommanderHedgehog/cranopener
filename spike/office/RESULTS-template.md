@@ -29,8 +29,8 @@ Files: `out/01b-chat-*`
 - Notes:
 
 **If this failed, stop and read the decision table's first row.** The steps
-below were still captured, but a tools rejection from a gateway that never
-reached the provider says nothing about the provider.
+below were still captured, but whatever step 2 does with `tools`, a gateway
+that never reached the provider says nothing about the provider.
 
 ## 2. The tools premise
 
@@ -39,6 +39,10 @@ Files: `out/02-tools-*`
 - HTTP status: `<n>`
 - Behaviour: `<hard rejection | accepted and silently ignored | tools actually worked>`
 - Did the reply carry `tool_calls`: `<yes | no>`
+- Baseline to compare against — 2026-08-07 measured *accepted and silently
+  ignored*: HTTP 200, no `tool_calls`, and `prompt_tokens` identical to the
+  same request with no schema at all. Anything else here is a change worth
+  writing up, in either direction.
 - Verbatim error, if any:
 
 ```

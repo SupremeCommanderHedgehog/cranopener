@@ -407,9 +407,11 @@ try {
 }
 
 # --- Get-HarnessForModel ---------------------------------------------------
-# opencode fails on its first tool call against a provider that refuses tools,
-# and the failure looks like a gateway outage. The routing rule is therefore
-# derived from the model rather than left to an operator flag.
+# opencode against a provider that does not do tool calling does not fail at
+# all: provider A accepts the `tools` array and discards it, so the session
+# runs to its iteration limit with a model that never calls a tool. The routing
+# rule is therefore derived from the model rather than left to an operator
+# flag, because nothing downstream would catch the mistake.
 
 Assert-Eq 'a provider-a model selects openhands' `
     'openhands' (Get-HarnessForModel 'provider-a/some-model')

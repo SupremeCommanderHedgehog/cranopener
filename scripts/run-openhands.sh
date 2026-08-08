@@ -192,7 +192,8 @@ fi
 if [ ! -f "$SETTINGS" ]; then
   echo "run-openhands.sh: $SETTINGS does not exist. The CLI would not fail on" >&2
   echo "  that -- it would build a default agent with native_tool_calling=True" >&2
-  echo "  and send a \`tools\` array to an endpoint that refuses it." >&2
+  echo "  and send a \`tools\` array to an endpoint that discards it silently," >&2
+  echo "  which fails as a session that never calls a tool, not as an error." >&2
   exit 3
 fi
 "$PYTHON" "$GENERATOR" --check "$SETTINGS" || exit 3

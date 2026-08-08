@@ -14,18 +14,22 @@ model_list:
       api_base: http://PLACEHOLDER-PROVIDER-C-HOST:8000/v1
       api_key: os.environ/PROVIDER_C_API_KEY
 
-  # Added in Phase 2, once the shim exists. A model without native tool
-  # calling, reached directly by opencode, fails on its first tool call.
-  # - model_name: provider-a/PLACEHOLDER-MODEL
-  #   litellm_params:
-  #     model: openai/PLACEHOLDER-UPSTREAM-MODEL
-  #     api_base: https://PLACEHOLDER-PROVIDER-A-HOST/v1
-  #     api_key: os.environ/PROVIDER_A_API_KEY
+  # Provider A: no native tool calling, so it is driven by OpenHands rather
+  # than opencode. The shim this entry once waited on was cancelled; the model
+  # name still has to carry the `provider-a/` prefix, because that prefix is
+  # what routes the session to the right harness.
+  - model_name: provider-a/PLACEHOLDER-MODEL
+    litellm_params:
+      model: openai/PLACEHOLDER-UPSTREAM-MODEL
+      api_base: https://PLACEHOLDER-PROVIDER-A-HOST/v1
+      api_key: os.environ/PROVIDER_A_API_KEY
 
 litellm_settings:
-  # The shim owns prompt-mode tool calling. If both layers inject tool
-  # definitions the prompts double and the output becomes unparseable, and it
-  # presents as a model defect rather than a configuration one.
+  # OpenHands owns prompt-mode tool calling, in the session container. If the
+  # gateway also injected tool definitions the prompts would double and the
+  # output become unparseable, presenting as a model defect rather than a
+  # configuration one. (This once read "the shim owns" -- the shim was
+  # cancelled and the harness took the job.)
   add_function_to_prompt: false
   num_retries: 3
   request_timeout: 300

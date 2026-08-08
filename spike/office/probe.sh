@@ -173,7 +173,9 @@ if choices:
     content = msg.get("content")
     if content:
         print("  content: %s" % str(content)[:300].replace("\n", " "))
-    # The one thing a tool-refusing endpoint is not supposed to be able to do.
+    # The one thing this endpoint has never yet done. Its absence is not proof
+    # of much on its own -- a 200 with no tool_calls is what discarding the
+    # schema looks like -- but its PRESENCE would end the second harness.
     if msg.get("tool_calls"):
         print("  tool_calls: PRESENT -- %d" % len(msg["tool_calls"]))
     if body.get("usage"):
@@ -346,17 +348,19 @@ if [ "$reach_rc" -eq 3 ]; then
 elif [ "$reach_rc" -ne 0 ]; then
   echo
   echo '  !! Reachability failed. Everything below is still captured, but read'
-  echo '     it as diagnostics rather than as findings: a tools rejection from'
-  echo '     a gateway that cannot reach the provider proves nothing about the'
-  echo '     provider.'
+  echo '     it as diagnostics rather than as findings: whatever step 2 does'
+  echo '     with `tools`, a gateway that cannot reach the provider proves'
+  echo '     nothing about the provider.'
 fi
 
 # --- 2. Is the premise true? -----------------------------------------------
-# The entire two-harness design rests on this endpoint refusing `tools`. Two
-# minutes to confirm, and it is the one step that can end the project in the
-# best possible way: if tools work, opencode drives this provider directly and
-# the second harness is unnecessary. Confirm the premise before spending the
-# rest of the visit on the thing built to work around it.
+# The entire two-harness design rests on this endpoint not doing tool calling.
+# Answered on 2026-08-07: it accepts `tools`, returns prose with no tool_calls,
+# and bills the same prompt_tokens as a request carrying no schema, so the
+# definitions are discarded before the model sees them. Re-run it anyway -- it
+# is two minutes, the endpoint could change under us, and it is the one step
+# that can end the project in the best possible way: if tools start working,
+# opencode drives this provider directly and the second harness is unnecessary.
 say '2. the tools premise'
 python3 - "$OUT/02-tools-req.json" "$PROBE_MODEL" \
   2>"$OUT/02-tools-generator-stderr.txt" <<'PY'

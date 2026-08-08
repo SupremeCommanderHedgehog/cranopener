@@ -329,10 +329,12 @@ function Get-HarnessForModel {
       Decide which agent harness a model identifier requires.
 
     .DESCRIPTION
-      Provider A refuses the `tools` parameter, so opencode cannot drive it --
-      it fails on its first tool call, and that failure reads as a gateway
-      outage rather than a misconfiguration. OpenHands renders tools into the
-      prompt and parses them back out itself, so it can.
+      Provider A does not do native tool calling, so opencode cannot drive it.
+      It does not refuse the `tools` parameter either -- it accepts the request
+      and throws the definitions away, so there is no error at all: the session
+      runs to its iteration limit with a model that never calls a tool.
+      OpenHands renders tools into the prompt and parses them back out itself,
+      so it can.
 
       Derived from the model rather than exposed as a flag on purpose. A flag
       can be set to contradict the model, and the resulting failure is
