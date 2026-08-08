@@ -20,10 +20,25 @@
 #                          context probe uploads megabytes over a corporate
 #                          link; raise this rather than concluding "hung".
 #   PROBE_CONTEXT_LADDER   token sizes to try, largest first, default
-#                          "200000 32000 8000".
+#                          "200000 32000 8000". The ladder stops at the first
+#                          size the endpoint accepts.
+#   PROBE_MAX_TURNS        ceiling on the step 4a conversation, default 10.
+#                          The run stops earlier if a reply carries no tool
+#                          call, so this bounds a model that never finishes.
 #
 # Usage: bash spike/office/probe.sh [output-directory]
 #        (default output directory: spike/office/out, which is gitignored)
+#
+# Steps, in the order they run:
+#   1a  GET /models          -- auth, TLS trust, and the model's exact spelling
+#   1b  one plain completion -- the first request that reaches the provider
+#   2   the tools premise    -- does the endpoint do native tool calling
+#   3   the context window   -- a ladder, largest first
+#   4a  multi-turn           -- does the MODEL keep emitting parseable tool
+#                               calls once history is flattened into text
+#
+# Step 4b, the real OpenHands harness, needs podman and the image and so runs
+# on the Windows side: see harness-run.ps1. This script prints a reminder.
 #
 # Exit status:
 #   0  the run completed and the endpoint answered a plain request
@@ -40,9 +55,8 @@
 set -uo pipefail
 
 # --- configuration ---------------------------------------------------------
-# Checked before anything else touches the network or the filesystem. All
-# three are reported at once: finding out about them one run at a time is a
-# waste of a visit that only happens monthly.
+# All three reported at once, before anything touches the network: finding out
+# one run at a time wastes a visit that only happens monthly.
 missing=()
 for var in PROBE_BASE_URL PROBE_MODEL PROBE_API_KEY; do
   if [ -z "${!var:-}" ]; then
@@ -81,45 +95,28 @@ done
 
 mkdir -p "$OUT" || exit 2
 
-# Everything this script says goes to the output directory as well as to the
-# terminal. In August a step failed before it reached curl, and the account of
-# why went to a terminal at the office and is gone -- leaving a captured
-# response that read like a provider finding and no record of the probe's own
-# behaviour. The kit's promise is that a failed trip is diagnosable at a desk,
-# and that promise does not survive the operator having to remember to pipe
-# through tee.
-#
-# Re-exec through a pipe rather than `exec > >(tee ...)`: process substitution
-# leaves tee racing the script's exit for the last lines written, and the last
-# lines are the ones that matter when something dies. PIPESTATUS preserves the
-# documented exit codes, which a bare pipe would replace with tee's.
+# Everything this script says is captured, not only what curl returns -- the
+# promise is that a failed trip is diagnosable at a desk. Re-exec through a
+# real pipe rather than `exec > >(tee ...)`, which races the script's exit for
+# the last lines written. See docs/hazards.md.
 if [ "${PROBE_TEE_ACTIVE:-}" != '1' ]; then
   export PROBE_TEE_ACTIVE=1
   bash "$0" "$@" 2>&1 | tee "$OUT/00-probe-log.txt"
   exit "${PIPESTATUS[0]}"
 fi
 
-# The key goes in a 0600 curl config file rather than on a command line.
-# /proc/<pid>/cmdline is world-readable and the office machine is not the
-# authoring machine; on Windows the same argument is visible to any process
-# that can read the process list. Nothing under $OUT ever contains it.
+# A 0600 curl config file, never a command line: /proc/<pid>/cmdline is
+# world-readable and the office machine is not this one. Nothing under $OUT
+# ever contains the key.
 AUTH="$(mktemp)"
 chmod 600 "$AUTH" 2>/dev/null
 printf 'header = "Authorization: Bearer %s"\n' "$PROBE_API_KEY" > "$AUTH"
 trap 'rm -f "$AUTH"' EXIT
 
-# No -v anywhere: verbose curl echoes the request headers, and the
-# Authorization header with them, into a file this script would then leave on
-# disk. The -w fields below cover the same diagnostics -- TLS verification,
-# which host answered, how long it took -- without the credential.
-# size_upload and http_version are here because of what the August run could
-# not answer. Three requests reached the upstream with empty bodies and nothing
-# recorded said whether curl had put the bytes on the wire -- and "curl never
-# sent it" and "something between curl and the app dropped it" have opposite
-# fixes. size_upload settles that in one field. http_version is recorded
-# alongside it because the failures were HTTP/2 through a CONNECT tunnel while
-# every success was small enough to be uninteresting, and the version is the
-# first thing to compare when the retry below behaves differently.
+# No -v anywhere: it would echo the Authorization header into a file left on
+# disk. These fields cover the same ground without the credential.
+# size_upload is the one the August run needed and did not have -- it says
+# whether the bytes left this machine. See docs/hazards.md.
 WFMT='http_code=%{http_code}
 ssl_verify_result=%{ssl_verify_result}
 remote_ip=%{remote_ip}
@@ -173,9 +170,8 @@ if choices:
     content = msg.get("content")
     if content:
         print("  content: %s" % str(content)[:300].replace("\n", " "))
-    # The one thing this endpoint has never yet done. Its absence is not proof
-    # of much on its own -- a 200 with no tool_calls is what discarding the
-    # schema looks like -- but its PRESENCE would end the second harness.
+    # Absence proves little -- a 200 with no tool_calls is what a discarded
+    # schema looks like -- but PRESENCE would end the second harness.
     if msg.get("tool_calls"):
         print("  tool_calls: PRESENT -- %d" % len(msg["tool_calls"]))
     if body.get("usage"):
@@ -195,43 +191,30 @@ request() {
   local label="$1" method="$2" path="$3" reqfile="${4:-}" extra="${5:-}"
   local meta rc code reqbytes=''
   local body="$OUT/$label-body.json"
-  # An array rather than an unquoted string so shellcheck stays happy and an
-  # option carrying a space cannot split. Expanded with the +alternate form
-  # because `set -u` treats "${empty[@]}" as unbound on bash before 4.4, and
-  # the machine this runs on at the office is not the machine it is written on.
+  # An array so an option carrying a space cannot split, expanded with the
+  # +alternate form because bash before 4.4 treats "${empty[@]}" as unbound.
   local -a xopt=()
   [ -n "$extra" ] && xopt=("$extra")
 
   : > "$body"
-  # A reused output directory is normal at the office. Clear this label's
-  # earlier artifacts up front, so a step that ends up sending nothing cannot
-  # leave the previous run's HTTP status sitting beside a meta file saying
-  # nothing was sent -- and that status is what gets read at a desk a week
-  # later.
+  # Output directories get reused at the office. A step that sends nothing
+  # must not leave the previous run's HTTP status sitting beside it.
   rm -f "$OUT/$label-status.txt" "$OUT/$label-headers.txt"
 
   if [ "$method" = "POST" ]; then
-    # Never post a body this script cannot vouch for. In August the request
-    # bodies for step 3 were not built, curl posted the empty files without
-    # complaint, and the endpoint's "Invalid JSON ... EOF at line 1 column 0"
-    # was captured as though it were a finding about the endpoint. It was a
-    # finding about the probe. A missing body is a probe failure and has to be
-    # reported as one, because the alternative is a plausible HTTP status that
-    # answers a question nobody asked.
-    # -f as well as -s: `-s` alone is true for a directory on Linux, where a
-    # directory has a nonzero size, and false on Windows, where it does not.
-    # A path that is not a regular file is exactly the shape an environment
-    # failure leaves behind, and curl would be handed it either way.
+    # Never post a body this script cannot vouch for: in August curl posted
+    # empty files and the endpoint's complaint was captured as a finding about
+    # the endpoint. See docs/hazards.md.
+    # -f as well as -s: a directory has nonzero size on Linux and zero on
+    # Windows, and a non-regular file is what an environment failure leaves.
     if [ ! -f "$reqfile" ] || [ ! -s "$reqfile" ]; then
       printf '  !! could not build the request body: %s\n' "$reqfile"
       printf '     Nothing was sent, and there is no HTTP status for this step.\n'
       printf '     This is a probe failure, not an endpoint finding -- read\n'
       printf '     %s-generator-stderr.txt for why the body was not built.\n' "$label"
       printf 'request_bytes=0\nnot_sent=body-missing-or-empty\n' > "$OUT/$label-meta.txt"
-      # 3, not 1: callers propagate this to the exit status, and 1 is
-      # documented as "the endpoint never answered". A request that was never
-      # built was never asked, and saying otherwise moves the very conflation
-      # this guard exists to prevent somewhere a script would read it.
+      # 3, not 1: callers propagate this, and 1 means "the endpoint never
+      # answered". A request never built was never asked.
       return 3
     fi
     reqbytes=$(wc -c < "$reqfile" | tr -d ' ')
@@ -259,17 +242,15 @@ request() {
   fi
 
   printf '%s\ncurl_exit=%s\n' "$meta" "$rc" > "$OUT/$label-meta.txt"
-  # What the probe meant to send, next to curl's own size_upload above. They
-  # agree or something between this script and the wire is wrong, and that
-  # comparison is the one August could not make.
+  # What the probe meant to send, beside curl's size_upload. They agree, or
+  # something between this script and the wire is wrong.
   [ -n "$reqbytes" ] && printf 'request_bytes=%s\n' "$reqbytes" >> "$OUT/$label-meta.txt"
   code=$(printf '%s\n' "$meta" | sed -n 's/^http_code=//p')
   [ -n "$code" ] || code=000
 
   printf '  HTTP %s  (curl exit %s)  -> %s\n' "$code" "$rc" "$OUT/$label-body.json"
   if [ "$rc" -ne 0 ]; then
-    # A transport failure -- DNS, TLS trust, proxy, timeout -- leaves no body
-    # to read, so curl's own message is the whole finding.
+    # DNS, TLS, proxy, timeout: no body to read, so curl's message is it.
     printf '  %s\n' "$(cat "$OUT/$label-curl-stderr.txt")"
   fi
   summarize "$body"
@@ -281,9 +262,8 @@ request() {
   esac
 }
 
-# True when the captured body is the endpoint complaining about a body it never
-# received -- a parse failure at the very first byte. That is the August
-# signature, and it is worth exactly one retry. A refusal about size, auth, or
+# True when the endpoint is complaining about a body it never received -- the
+# August signature, worth exactly one retry. A refusal about size, auth or
 # model naming is a real answer and must not drag a retry in behind it.
 empty_body_complaint() {
   python3 - "$1" <<'PY'
@@ -311,19 +291,16 @@ echo "  base:    $BASE"
 
 # --- 1a. Does the gateway answer at all, and by what name? -----------------
 # The cheapest decisive request in the kit: no tokens, no generation, and it
-# settles auth, TLS trust, and the exact spelling of the model in one call.
-# Proxied mode has never been exercised against a real provider -- every run so
-# far used placeholder endpoints -- so all three are unproven, and a model name
-# that is one character out fails later in a way that reads like an outage.
+# settles auth, TLS trust and the model's exact spelling in one call. A model
+# name one character out fails later in a way that reads like an outage.
 say '1a. gateway reachable, and what it calls the model'
 request 01a-models GET /models
 models_rc=$?
 
 # --- 1b. Does a plain completion get through? ------------------------------
-# A model list can be served by the gateway without it ever having spoken to
-# the provider. This is the first request that actually reaches through. If
-# this fails, nothing below it means anything -- but the steps below still run,
-# because their captured bodies are what get diagnosed at home.
+# The gateway can list models without ever having spoken to the provider, so
+# this is the first request that reaches through. The steps below still run if
+# it fails: their captured bodies are what get diagnosed at home.
 say '1b. one plain completion, end to end'
 python3 - "$OUT/01b-chat-req.json" "$PROBE_MODEL" \
   2>"$OUT/01b-chat-generator-stderr.txt" <<'PY'
@@ -354,13 +331,10 @@ elif [ "$reach_rc" -ne 0 ]; then
 fi
 
 # --- 2. Is the premise true? -----------------------------------------------
-# The entire two-harness design rests on this endpoint not doing tool calling.
-# Answered on 2026-08-07: it accepts `tools`, returns prose with no tool_calls,
-# and bills the same prompt_tokens as a request carrying no schema, so the
-# definitions are discarded before the model sees them. Re-run it anyway -- it
-# is two minutes, the endpoint could change under us, and it is the one step
-# that can end the project in the best possible way: if tools start working,
-# opencode drives this provider directly and the second harness is unnecessary.
+# The two-harness design rests on this endpoint not doing tool calling.
+# Measured 2026-08-07: it accepts `tools` and discards them, billing the same
+# prompt_tokens as a request with no schema at all. Re-run anyway -- two
+# minutes, and if tools ever work the second harness becomes unnecessary.
 say '2. the tools premise'
 python3 - "$OUT/02-tools-req.json" "$PROBE_MODEL" \
   2>"$OUT/02-tools-generator-stderr.txt" <<'PY'
@@ -399,24 +373,18 @@ if [ "$tools_rc" -eq 0 ]; then
 fi
 
 # --- 3. How big is the context window? -------------------------------------
-# Measured 2026-08-08 at ~160,000 tokens: an 800KB body was accepted at the top
-# rung and billed as prompt_tokens=160001. That puts ~5,200 tokens of tool
-# schema per turn at about 3% of the window -- see the table in
-# spike/RESULTS.md, which is gitignored and local. Re-run it anyway; it is one
-# request in the good case and the endpoint can change under us.
+# Measured 2026-08-08 at ~160,000 tokens, which makes the tool schemas ~3% and
+# a rounding error. Re-run anyway; the endpoint can change under us.
 #
-# Largest first, stopping at the first size the endpoint accepts. That order is
-# what makes this cheap in the good case: if the largest size is accepted the
-# window is enormous, one request settles it, and the schemas are a rounding
-# error. Only a rejection costs another request, and a rejected request is
-# rejected before generation, so it is billed for nothing.
+# Largest first, stopping at the first accepted size: one request settles the
+# good case, and a rejection is billed for nothing because it is refused
+# before generation.
 say '3. context window'
 echo "  ladder (tokens, largest first): $CONTEXT_LADDER"
 accepted_at=''
 rejected_at=''
-# Rungs that actually reached the wire. Without this, a ladder whose bodies all
-# failed to build reports that every size was refused -- a statement about the
-# endpoint, from a step that never spoke to it.
+# Rungs that reached the wire. Without this, a ladder whose bodies all failed
+# to build would report that every size was refused.
 attempted=0
 for tokens in $CONTEXT_LADDER; do
   label="03-context-$tokens"
@@ -426,9 +394,8 @@ import json
 import sys
 
 out, model, tokens = sys.argv[1], sys.argv[2], int(sys.argv[3])
-# Four characters per token, the same estimate the rest of the spike tooling
-# uses. The question is "is this 5% or 40% of the window", which an estimate
-# settles; a real tokenizer would be a dependency for no extra answer.
+# Four characters per token, as the rest of the spike tooling estimates. The
+# question is 5% or 40% of the window; a real tokenizer buys no extra answer.
 filler = "word " * max(1, (tokens * 4) // 5)
 json.dump({
     "model": model,
@@ -446,18 +413,15 @@ PY
     accepted_at="$tokens"
     break
   fi
-  # Nothing reached the wire, so this rung refused nothing. Counting it as a
-  # rejection would put a bound on the window that no request ever tested.
+  # Nothing reached the wire, so this rung refused nothing. Counting it would
+  # bound the window with a request that was never sent.
   if [ "$ladder_rc" -eq 3 ]; then
     continue
   fi
   attempted=$((attempted + 1))
 
-  # August: three rungs rejected for a body the upstream never received, and
-  # the visit ended with no measurement and no mechanism. size_upload above now
-  # says whether curl sent the bytes; this says whether anything can be done
-  # about it. One extra request, rejected before generation and so billed for
-  # nothing, against another month of not knowing.
+  # One extra request, billed for nothing, against another month of not
+  # knowing. See docs/hazards.md for what August cost.
   if empty_body_complaint "$OUT/$label-body.json"; then
     echo
     echo '  The endpoint is reporting a body it never received. That is not a'
@@ -480,11 +444,8 @@ PY
     echo '     them and the problem is on this side.'
   fi
 
-  # Set only once the rung has genuinely been refused, retry included. Clearing
-  # it on a successful retry would be wrong: the retry says this rung was never
-  # really refused, and says nothing about a larger rung that was. Largest
-  # first means this ends up holding the smallest size actually refused, which
-  # is the tight upper bound for the bracket below.
+  # Only once genuinely refused, retry included. Largest-first means this ends
+  # up holding the smallest size actually refused: the bracket's upper bound.
   rejected_at="$tokens"
 done
 
@@ -507,28 +468,19 @@ fi
 echo "  Providers usually name their own limit in the rejection. Read it out of"
 echo "  the captured body rather than inferring it from the bracket."
 
-# --- 4. Does the model survive a multi-turn prompt-mode conversation? ------
-# The question the visit exists to answer, and until 2026-08-08 this step was a
-# `cat` of instructions telling the operator to run `cranopener` by hand. That
-# was wrong twice over: it left the decisive step to a human who is about to
-# leave a building, and the command it printed needs pwsh, podman, a 6GB image
-# and an installed ~/.cranopener -- none of which exist in the WSL2 VM the rest
-# of this kit runs in. Two visits produced no answer as a result.
-#
-# So this now runs here, over curl, using the same transport steps 1-3 just
-# proved. It is not the OpenHands harness and does not claim to be; what it
-# measures is the thing the harness depends on and the thing that cannot be
-# measured at a desk -- whether THIS MODEL keeps emitting parseable tool calls
-# once history has been flattened into text. Turn three is where that breaks if
-# it breaks. See harness-run.ps1 for the real-harness run on the Windows side.
+# --- 4a. Does the model survive a multi-turn prompt-mode conversation? -----
+# The question the visit exists to answer. Runs here over curl, on the
+# transport steps 1-3 just proved: not the OpenHands harness, but the thing
+# the harness depends on and cannot be measured at a desk -- whether THIS
+# MODEL keeps emitting parseable tool calls once history is flattened into
+# text. Turn three is where that breaks if it breaks. 4b is harness-run.ps1.
 say '4a. multi-turn, prompt-mode tool calling (the model, over curl)'
 MAX_TURNS="${PROBE_MAX_TURNS:-10}"
 CONV="$OUT/04-conversation.json"
 echo "  up to $MAX_TURNS turns, tool definitions rendered into the prompt"
 
-# The syntax is OpenHands', copied from tests/fake-upstream/scripts/
-# openhands-multi-turn.json. Measuring a different syntax would measure a
-# different question.
+# OpenHands' own syntax, copied from tests/fake-upstream/scripts/. A different
+# syntax would measure a different question.
 python3 - "$CONV" <<'PY'
 import json
 import sys

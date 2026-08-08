@@ -33,11 +33,9 @@ $source = Join-Path (Split-Path -Parent $PSScriptRoot) 'kube'
 
 if (-not (Test-Path $source)) { throw "missing kube templates at $source" }
 
-# Translate before creating or copying anything. A destination this cannot
-# express as a VM path -- a relative path, a UNC share -- produces an install
-# that can never start the gateway, so it has to fail while the disk is still
-# untouched. Doing it after the copy loop left five files and an
-# unsubstituted placeholder behind for the operator to clean up by hand.
+# Translate before touching the disk. A destination with no VM-path form -- a
+# relative path, a UNC share -- can never start the gateway, and failing after
+# the copy loop leaves files and an unsubstituted placeholder behind.
 $vmHome = ConvertTo-VmPath $Destination
 
 New-Item -ItemType Directory -Force -Path $Destination | Out-Null
@@ -109,11 +107,9 @@ if ($drifted) {
     }
 }
 
-# install.ps1 never overwrites, so an install predating the kube migration
-# keeps an opencode.proxied.json pointing at http://litellm:4000. Containers in
-# a pod share one network namespace, so that name no longer resolves at all --
-# and the failure surfaces at the first prompt of a session, looking like a
-# gateway outage rather than a stale file. Detect it here instead.
+# This never overwrites, so a pre-kube install keeps a proxied config pointing
+# at http://litellm:4000 -- a name that no longer resolves inside a shared pod
+# namespace, failing at the first prompt as though the gateway were down.
 $dead = @()
 foreach ($f in 'compose.yaml', 'compose.direct.yaml', '.env.example', '.env') {
     if (Test-Path (Join-Path $Destination $f)) { $dead += $f }
@@ -153,23 +149,12 @@ Write-Host '     The gateway sets SSL_CERT_FILE to it, which REPLACES the defaul
 Write-Host '     trust store rather than adding to it -- so this file must contain'
 Write-Host '     the system roots as well as any corporate roots, or every upstream'
 Write-Host '     call fails looking like a provider outage. To build one:'
-# Both commands write the bundle from inside the container, through a bind
-# mount, so no host shell ever touches the bytes. That is the point, not a
-# stylistic preference: every redirect-based form of this instruction has a
-# silent failure mode.
+# Both commands write the bundle from INSIDE the container, so no host shell
+# touches the bytes. Not stylistic: every redirect-based form of this
+# instruction has a silent failure mode. See docs/hazards.md.
 #
-#   `podman run IMAGE cat ...` -- the image entrypoint is litellm, so the
-#   arguments parse as a subcommand and it exits 2, while the redirect has
-#   already truncated the target to zero bytes.
-#
-#   `... > file` under Windows PowerShell 5.1 -- 5.1 writes UTF-16LE. OpenSSL
-#   then reads ZERO certificates from a ~435KB file that is non-empty, is
-#   plausibly sized, and whose first line even reads correctly through
-#   Get-Content, because PowerShell decodes the BOM back to text. It defeats
-#   the emptiness check in cranopener.ps1 and every size heuristic.
-#
-# A bash-style `\` continuation would be wrong here too: this text is read at
-# a PowerShell prompt, where `\` does not continue a line. Printed unwrapped.
+# Printed unwrapped, because `\` does not continue a line at a PowerShell
+# prompt.
 $certsMount = "$(ConvertTo-PodmanPath $Destination)/certs"
 Write-Host "       podman run --rm -v `"${certsMount}:/out`" --entrypoint cp ghcr.io/berriai/litellm:main-stable /etc/ssl/certs/ca-certificates.crt /out/extra-roots.pem"
 Write-Host '     To add corporate roots, place them beside it as'

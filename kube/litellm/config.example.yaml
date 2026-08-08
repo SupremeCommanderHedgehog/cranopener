@@ -34,17 +34,13 @@ litellm_settings:
   num_retries: 3
   request_timeout: 300
 
-  # WARNING: these two keys are NOT enforced by this stack.
+  # WARNING: these two keys are NOT enforced by this stack. LiteLLM tracks
+  # spend in Postgres and this pod provisions none, so they are inert until
+  # DATABASE_URL points at a reachable database -- an unattended agent against
+  # a metered endpoint runs until it finishes or you stop it.
   #
-  # LiteLLM tracks spend in a Postgres database, and the gateway pod provisions
-  # none. Without DATABASE_URL set and a database reachable, the values below
-  # are inert -- an agent looping unattended against a metered endpoint will
-  # run until it finishes or you stop it.
-  #
-  # They are left here, correctly placed under litellm_settings rather than
-  # general_settings, so that adding a database is the only step needed to
-  # make them real. Until then, treat unattended runs as uncapped and bound
-  # them some other way: a token limit on the key at the provider, or
-  # supervision.
+  # Left here, correctly placed, so that adding a database is the only step
+  # needed to make them real. Until then bound runs another way: a token limit
+  # on the key at the provider, CRANOPENER_MAX_ITERATIONS, or supervision.
   max_budget: 50
   budget_duration: 30d

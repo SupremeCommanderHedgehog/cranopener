@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Refuse a push that would publish something this repository must not carry.
+#
+# Tracked, not written into .git/hooks, so it is shared rather than a habit on
+# one machine. Enable it once per clone:
+#
+#     git config core.hooksPath .githooks
+#
+# scripts/install-hooks.sh does that for you.
+#
+# Bypass with `git push --no-verify` only when you have read the finding and
+# know it is a false positive -- and then fix the rule, because the next person
+# will hit it too.
+set -uo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)" || exit 0
+checker="$repo_root/scripts/check-secrets.sh"
+
+[ -f "$checker" ] || exit 0
+
+echo "pre-push: checking for secrets..."
+if ! bash "$checker"; then
+  echo
+  echo "pre-push: REFUSED. Nothing was pushed." >&2
+  echo "  Fix the finding, or re-run with --no-verify if it is a false" >&2
+  echo "  positive -- and fix the rule in scripts/check-secrets.sh so the" >&2
+  echo "  next person does not hit it." >&2
+  exit 1
+fi
