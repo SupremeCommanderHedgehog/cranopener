@@ -575,8 +575,7 @@ json.dump({
 }, open(sys.argv[2], "w"))
 PY
 
-  request "$label" POST /chat/completions "$OUT/$label-req.json"
-  if [ $? -ne 0 ]; then
+  if ! request "$label" POST /chat/completions "$OUT/$label-req.json"; then
     echo "  the conversation stopped here -- see $label-body.json"
     break
   fi
