@@ -349,8 +349,8 @@ elif [ "$reach_rc" -ne 0 ]; then
   echo
   echo '  !! Reachability failed. Everything below is still captured, but read'
   echo '     it as diagnostics rather than as findings: whatever step 2 does'
-  echo '     with `tools`, a gateway that cannot reach the provider proves'
-  echo '     nothing about the provider.'
+  echo '     with the tools parameter, a gateway that never reached the'
+  echo '     provider proves nothing about it.'
 fi
 
 # --- 2. Is the premise true? -----------------------------------------------
