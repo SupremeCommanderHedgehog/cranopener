@@ -33,7 +33,10 @@ if ! command -v git >/dev/null 2>&1 \
   exit 0
 fi
 
-mapfile -t scripts < <(git ls-files '*.sh')
+# .githooks/* as well as *.sh: git requires hooks be named for the hook they
+# implement, so pre-push carries no extension and a glob on one would skip the
+# script standing between a mistake and a public push.
+mapfile -t scripts < <(git ls-files '*.sh' '.githooks/*')
 
 # Zero files is a failure, not a pass, for the same reason run-all.sh treats an
 # empty glob as one: a lint that checked nothing looks exactly like a clean one.
