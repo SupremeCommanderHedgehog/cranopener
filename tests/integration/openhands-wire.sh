@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Proves the provider-A path end to end against a fake tool-refusing upstream.
+# Proves the provider-A path end to end against a fake upstream that will not
+# do native tool calling.
 #
 # Deliberately outside tests/run-all.sh: it needs a container engine and the
 # built image, and the authoring machine's suite is offline by design.
@@ -71,8 +72,17 @@ start_fake() {
   local rec="$1"
   mkdir -p "$rec"
   chmod -R a+rwX "$WORK"
+  # FAKE_TOOLS_MODE is 'ignore', not 'reject': on 2026-08-07 the endpoint was
+  # measured accepting the `tools` parameter and discarding it, not refusing
+  # it, and an end-to-end proof against a behaviour the provider does not have
+  # is worth very little. It also makes this the honest test. Under 'reject' a
+  # harness that regressed and sent tools would fail the turn count as well as
+  # the wire assertion; under 'ignore' nothing in the response betrays it and
+  # count_with_tools below is the only thing standing between that regression
+  # and the office -- which is exactly the position the real provider puts us
+  # in. 'reject' is still exercised, offline, by the stub's own self-test.
   FAKE_PORT="$PORT" \
-  FAKE_TOOLS_MODE=reject \
+  FAKE_TOOLS_MODE=ignore \
   FAKE_SCRIPT="$SCRIPT" \
   FAKE_RECORD_DIR="$rec" \
     python3 tests/fake-upstream/server.py >"$WORK/server.log" 2>&1 &
@@ -155,9 +165,9 @@ count_with_tools() {
   # Parsed, never grepped. In prompt mode the tool definitions are rendered
   # INTO the system prompt, so the word "tools" is all over a perfectly correct
   # request body and a grep would report every one of them as a violation. The
-  # claim is about the top-level `tools` key of the request -- the thing an
-  # endpoint that refuses tool calling rejects -- and only a parse can tell
-  # those apart.
+  # claim is about the top-level `tools` key of the request -- the thing the
+  # provider throws away without saying so -- and only a parse can tell those
+  # apart.
   python3 - "$1" <<'PY'
 import json
 import os
@@ -193,8 +203,11 @@ stop_fake
 ok_count=$(count_requests "$OK_REC")
 ok_tools=$(count_with_tools "$OK_REC")
 
-# The claim the whole design rests on. If a tools array reaches the wire, the
-# harness is not in prompt mode and provider A rejects every request.
+# The claim the whole design rests on, and under FAKE_TOOLS_MODE=ignore the
+# only assertion that can catch a breach of it. If a tools array reaches the
+# wire the harness is not in prompt mode, and provider A will answer anyway --
+# discarding the definitions and returning prose, turn after turn, until the
+# iteration bound stops a session that never called a tool.
 assert_eq 'no request carried a tools array' '0' "$ok_tools"
 
 # Turn three is where flattened history breaks, so turn four is the evidence

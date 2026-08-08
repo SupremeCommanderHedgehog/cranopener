@@ -99,7 +99,8 @@ def check(path, native_tool_calling):
     if agent.llm.native_tool_calling != native_tool_calling:
         raise SystemExit(
             "%s: native_tool_calling=%r, wanted %r. Running as-is sends a "
-            "`tools` array to an endpoint that refuses it."
+            "`tools` array to an endpoint that discards it without complaining, "
+            "so the run does not fail -- it just never calls a tool."
             % (path, agent.llm.native_tool_calling, native_tool_calling))
 
     print("checked %s (native_tool_calling=%r)"

@@ -1,10 +1,10 @@
-"""A stub OpenAI-compatible endpoint that refuses the `tools` parameter.
+"""A stub OpenAI-compatible endpoint that will not do native tool calling.
 
 This exists so the provider-A path can be falsified at a desk instead of on an
-office visit. It mimics the one behaviour that defines that endpoint -- it will
-not accept tool definitions -- and records every request body so a test can
-assert what actually went over the wire rather than what a harness claims it
-sent.
+office visit. It mimics the one behaviour that defines that endpoint -- tool
+definitions never reach the model -- and records every request body so a test
+can assert what actually went over the wire rather than what a harness claims
+it sent.
 
 Deliberately has no `#!` line: build hosts running fapolicyd refuse to read
 shebang'd Python files, and this is always invoked as `python3 <file>`.
@@ -13,11 +13,18 @@ Configuration is entirely environmental, so the same file serves the offline
 self-test and the in-container integration test:
 
   FAKE_PORT        listen port, default 8899
-  FAKE_TOOLS_MODE  'reject' (400, the observed office behaviour) or 'ignore'
-                   (200, tools silently dropped). Both were reported as
-                   possible; a harness must survive either. Surrounding
-                   whitespace and case are ignored; any other value is a
-                   startup error, never a silent fallback.
+  FAKE_TOOLS_MODE  'ignore' (200, tools silently dropped) is what the endpoint
+                   was measured doing on 2026-08-07: it took the `tools`
+                   parameter without complaint, answered in prose, and billed
+                   the same prompt_tokens as a request carrying no schema at
+                   all -- the definitions were discarded before the model saw
+                   them. 'reject' (400) has never been observed and remains
+                   the default anyway, because it is the stricter canary: a
+                   harness that regresses and starts sending tools fails
+                   loudly under 'reject' and silently under the behaviour the
+                   provider actually has. Run both; they test different
+                   things. Surrounding whitespace and case are ignored; any
+                   other value is a startup error, never a silent fallback.
   FAKE_SCRIPT      path to a JSON file with a "responses" array of assistant
                    texts, replayed one per request
   FAKE_RECORD_DIR  directory to write each request body into, as req-NNN.json
@@ -153,9 +160,15 @@ class Handler(BaseHTTPRequestHandler):
             self._bad_request("request body must be a JSON object")
             return
 
-        # The whole point of this stub. The office endpoint will not accept
-        # tool definitions, so a harness that sends them must fail here, loudly
-        # and at the desk, rather than silently at the provider a month later.
+        # The whole point of this stub. The office endpoint does not do native
+        # tool calling, so a harness that sends definitions must be caught at
+        # the desk rather than a month later at the provider.
+        #
+        # Under 'ignore' -- what the endpoint was measured doing -- this branch
+        # is skipped and the request is answered normally, which is precisely
+        # why the recorded bodies matter more than the status code: against the
+        # real provider nothing about the response tells you a tools array was
+        # sent and thrown away.
         if "tools" in body and TOOLS_MODE == "reject":
             self._send(400, {"error": {
                 "message": "this endpoint does not support the 'tools' parameter",

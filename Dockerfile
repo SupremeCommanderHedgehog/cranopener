@@ -157,10 +157,11 @@ RUN set -eux; \
     R --version
 
 # --- agent harnesses ---
-# Two harnesses, divided by what the provider will accept. opencode (installed
+# Two harnesses, divided by what the provider will do. opencode (installed
 # above) drives every provider that supports native tool calling. Provider A
-# refuses the `tools` parameter entirely, so it needs a harness that renders
-# tools into the prompt and parses them back out itself — that is openhands.
+# accepts the `tools` parameter and discards it without a word, so it needs a
+# harness that renders tools into the prompt and parses them back out itself —
+# that is openhands.
 # aider is the fallback for the case where openhands parses the replies but
 # derails; it has to already be on the machine when that is discovered, because
 # the endpoint is a monthly trip away and behind a proxy with its own CA bundle.

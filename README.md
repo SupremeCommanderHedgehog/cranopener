@@ -93,12 +93,20 @@ which files have drifted from the shipped templates.
 ## Two harnesses
 
 Providers that support native tool calling run under opencode. One provider
-does not accept the `tools` parameter at all, so it runs under OpenHands
-instead, which renders the tool definitions into the prompt and parses the
-calls back out of the reply. Nothing here translates between the two: a shim
-that made a tool-refusing endpoint look tool-capable to opencode was designed,
-costed, and cancelled, and the second harness exists so that this repository
-never owns one.
+does not do tool calling at all, so it runs under OpenHands instead, which
+renders the tool definitions into the prompt and parses the calls back out of
+the reply. Nothing here translates between the two: a shim that made such an
+endpoint look tool-capable to opencode was designed, costed, and cancelled, and
+the second harness exists so that this repository never owns one.
+
+That provider does not refuse the `tools` parameter — it accepts it and throws
+it away. Measured on 2026-08-07: a request carrying a full function schema came
+back 200 with prose, no `tool_calls`, and exactly the same `prompt_tokens` as
+the same request with no schema at all. The definitions never reached the
+model, and nothing in the response says so. This is worse than a refusal, not
+better. An error names the problem on the first call; silence lets opencode
+spend an entire iteration budget looking healthy, so the failure arrives as a
+bill and a transcript of a model that would not use its tools.
 
 ```powershell
 cranopener                                        # opencode, whatever its config names
@@ -114,10 +122,12 @@ launcher refuses that combination rather than absorbing it.
 
 `-Model` takes the model id as the gateway names it, and the harness follows
 from that id. There is no flag to pick one, because a flag can be set to
-contradict the model: point opencode at a provider that refuses tools and it
-fails on its first tool call, with an error that reads as a gateway outage
-rather than a misconfiguration. That is expensive to diagnose and trivial to
-prevent, so the combination is not expressible. The other known-bad pairing is
+contradict the model: point opencode at a provider that does not do tool
+calling and nothing fails. There is no error to read, because the provider
+accepts the tool definitions and discards them — the session just runs, turn
+after turn, with a model that never calls a tool and an agent that keeps
+asking. That is expensive to diagnose precisely because it never announces
+itself, and trivial to prevent, so the combination is not expressible. The other known-bad pairing is
 refused outright — `-Direct` with such a model is an error, since that provider
 exists only behind the gateway and `-Direct` is what bypasses it.
 
