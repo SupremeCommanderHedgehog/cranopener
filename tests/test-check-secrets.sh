@@ -53,13 +53,17 @@ caught 'a literal api key is caught' 'd.yaml' \
   'api_key: "9f2b7c1d4e8a3f6b2c9d"' 'credential written as a literal'
 
 caught 'a literal bearer token is caught' 'e.txt' \
-  'Authorization: Bearer 9f2b7c1d4e8a3f6b2c9d5e' 'credential written as a literal'
+  "Authorization: Bea""rer 9f2b7c1d4e8a3f6b2c9d5e" 'credential written as a literal'
 
+# Assembled, like the tokens above. A tracked file in a public repository has
+# no business containing a .mil or .gov hostname even a fabricated one, and a
+# history scan that has to be told to ignore its own test fixtures is a
+# history scan nobody trusts.
 caught 'a .mil hostname is caught' 'f.yaml' \
-  'api_base: https://api.example-host.mil/v1' '.mil or .gov hostname'
+  "api_base: https://api.example-host.""mil/v1" '.mil or .gov hostname'
 
 caught 'a .gov hostname is caught' 'g.yaml' \
-  'api_base: https://data.example-host.gov/v1' '.mil or .gov hostname'
+  "api_base: https://data.example-host.""gov/v1" '.mil or .gov hostname'
 
 caught 'a routable IP literal is caught' 'h.txt' \
   'PROXY=http://203.0.113.9:8080' 'IP address literal'
