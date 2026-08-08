@@ -252,4 +252,52 @@ bash "$PROBE" "$OUT7" >/dev/null 2>&1
 assert_eq 'a probe that never asked does not exit as if the endpoint failed' \
   '3' "$?"
 
+# --- step 4 actually runs -------------------------------------------------
+# Until 2026-08-08 step 4 was a `cat` of instructions telling the operator to
+# run `cranopener` by hand -- a command needing pwsh, podman and a 6GB image,
+# none of which exist in the WSL2 VM the rest of the kit runs in. Two office
+# visits produced no answer. These assertions exist so it cannot quietly become
+# documentation again.
+OUT8="$WORK/out8"
+kill "$STUB_PID" 2>/dev/null
+rm -f "$PORT_FILE"
+PROBE_STUB_SCRIPT=tests/probe-stub/multi-turn-script.json \
+  python3 tests/probe-stub/server.py "$PORT_FILE" "$REQ_LOG" &
+STUB_PID=$!
+for _ in $(seq 1 50); do
+  [ -s "$PORT_FILE" ] && break
+  sleep 0.1
+done
+PORT="$(cat "$PORT_FILE")"
+export PROBE_BASE_URL="http://127.0.0.1:$PORT/v1"
+
+PROBE_CONTEXT_LADDER='2000' PROBE_MAX_TURNS=6 bash "$PROBE" "$OUT8" >/dev/null 2>&1
+
+assert_ok 'step 4 issues real requests rather than printing instructions' \
+  test -s "$OUT8/04-turn-01-meta.txt"
+
+# Turn three is where flattened history breaks. A step that stops before it
+# cannot see the thing the visit exists to see.
+assert_ok 'the conversation reaches turn four' \
+  test -s "$OUT8/04-turn-04-meta.txt"
+
+# The measurement itself: three scripted replies carry calls, the fourth does
+# not. Scoring the fourth as a call would report a derail as a success.
+assert_ok 'it counts exactly the replies that carried a tool call' \
+  grep -q '4 turns, 3 carried a parseable tool call' "$OUT8/00-probe-log.txt"
+
+assert_ok 'it names the first reply with no call' \
+  grep -q 'First reply with no call: turn 4' "$OUT8/00-probe-log.txt"
+
+# History has to accumulate, or every turn is turn one and the thing being
+# measured never happens. Two messages seeded, then two per turn.
+history=$(python3 - "$OUT8/04-conversation.json" <<'PY'
+import json
+import sys
+
+print(len(json.load(open(sys.argv[1]))["messages"]))
+PY
+)
+assert_eq 'the conversation carries its history forward' '9' "$history"
+
 finish

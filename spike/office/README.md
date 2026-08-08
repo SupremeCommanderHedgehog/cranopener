@@ -103,8 +103,30 @@ it. If it recurs, `size_upload` next to `request_bytes` says in one line which
 side of the wire lost the body, and a rejection of that exact shape costs one
 retry over `--http1.1`.
 
-**4 — the multi-turn run.** Run by hand, in a scratch repository. Not "does it
-parse once" — does it reach turn ten and finish something.
+**4 — the multi-turn run.** The question the visit exists for, and until
+2026-08-08 it was not code. The step printed instructions telling the operator
+to run `cranopener` by hand — a command needing pwsh, podman, a 6 GB image and
+an installed `~/.cranopener`, none of which exist in the WSL2 VM the rest of
+this kit runs in. Two visits produced no answer, which was the kit's fault and
+not the operator's.
+
+It now runs, over curl, using the transport steps 1–3 just proved. Up to ten
+turns, tool definitions rendered into the prompt in OpenHands' own syntax, each
+reply fed back with a fabricated observation, every exchange captured. It
+reports how many turns carried a parseable tool call and which reply was the
+first without one — and stops there, because past that point every turn is a
+billed request that cannot tell "finished" from "derailed". Only the text can,
+and the text is captured.
+
+What this measures is the model, not the harness: whether it keeps its shape
+once history is flattened into text. Turn three is where that breaks if it
+breaks. `PROBE_MAX_TURNS` raises the ceiling.
+
+For the harness itself — the real OpenHands run, in a container, against the
+gateway — use `harness-run.ps1` from the Windows side, where podman and the
+image live. It checks every prerequisite before starting anything and names all
+of them at once, because at the office the failure that costs a month is not
+"this did not work" but "this did not work and I found out forty minutes in".
 
 ## Everything is captured, always
 

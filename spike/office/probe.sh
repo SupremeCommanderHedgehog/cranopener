@@ -507,26 +507,156 @@ fi
 echo "  Providers usually name their own limit in the rejection. Read it out of"
 echo "  the captured body rather than inferring it from the bracket."
 
-# --- 4. Does a harness survive a real multi-turn task? ---------------------
-# The trip. Everything above is minutes; this is the question the visit exists
-# to answer, and it needs a real repository and a human watching, so it is run
-# by hand rather than from here.
-say '4. the multi-turn run (run this by hand)'
-cat <<EOF
-  In a scratch repository, with the gateway up:
+# --- 4. Does the model survive a multi-turn prompt-mode conversation? ------
+# The question the visit exists to answer, and until 2026-08-08 this step was a
+# `cat` of instructions telling the operator to run `cranopener` by hand. That
+# was wrong twice over: it left the decisive step to a human who is about to
+# leave a building, and the command it printed needs pwsh, podman, a 6GB image
+# and an installed ~/.cranopener -- none of which exist in the WSL2 VM the rest
+# of this kit runs in. Two visits produced no answer as a result.
+#
+# So this now runs here, over curl, using the same transport steps 1-3 just
+# proved. It is not the OpenHands harness and does not claim to be; what it
+# measures is the thing the harness depends on and the thing that cannot be
+# measured at a desk -- whether THIS MODEL keeps emitting parseable tool calls
+# once history has been flattened into text. Turn three is where that breaks if
+# it breaks. See harness-run.ps1 for the real-harness run on the Windows side.
+say '4. multi-turn, prompt-mode tool calling'
+MAX_TURNS="${PROBE_MAX_TURNS:-10}"
+CONV="$OUT/04-conversation.json"
+echo "  up to $MAX_TURNS turns, tool definitions rendered into the prompt"
 
-    cranopener -Model $PROBE_MODEL "add a failing test, then make it pass" \\
-      2>&1 | tee $OUT/04-run.log
+# The syntax is OpenHands', copied from tests/fake-upstream/scripts/
+# openhands-multi-turn.json. Measuring a different syntax would measure a
+# different question.
+python3 - "$CONV" <<'PY'
+import json
+import sys
 
-  Then, still at the office and before leaving:
+SYSTEM = """You are a software engineer working in /workspace. You have one tool.
 
-    - record the turn count, whether it finished, and where it derailed
-    - if it derails, raise CRANOPENER_MAX_ITERATIONS and run it once more --
-      the default is a bound, not a budget, and a run stopped by the cap looks
-      a lot like a run that gave up
-    - keep 04-run.log whatever happens. It is the only record of this step,
-      and it is the step that cannot be repeated for a month.
-EOF
+To use it, emit EXACTLY this form, and nothing else after it:
+
+<function=terminal>
+<parameter=command>THE SHELL COMMAND</parameter>
+<parameter=security_risk>LOW</parameter>
+<parameter=summary>WHY</parameter>
+</function>
+
+You will be given the output of each command. Work one command at a time.
+When the task is complete, say TASK COMPLETE and stop calling the tool."""
+
+TASK = ("Create /workspace/hello.txt containing the single word hello, "
+        "then read it back to confirm it, then list the directory.")
+
+json.dump({"messages": [
+    {"role": "system", "content": SYSTEM},
+    {"role": "user", "content": TASK},
+]}, open(sys.argv[1], "w"))
+PY
+
+turn=1
+calls=0
+first_nocall=''
+while [ "$turn" -le "$MAX_TURNS" ]; do
+  label=$(printf '04-turn-%02d' "$turn")
+  printf '\n  -- turn %d --\n' "$turn"
+
+  python3 - "$CONV" "$OUT/$label-req.json" "$PROBE_MODEL" \
+    2>"$OUT/$label-generator-stderr.txt" <<'PY'
+import json
+import sys
+
+conv = json.load(open(sys.argv[1]))
+json.dump({
+    "model": sys.argv[3],
+    "messages": conv["messages"],
+    "max_tokens": 512,
+}, open(sys.argv[2], "w"))
+PY
+
+  request "$label" POST /chat/completions "$OUT/$label-req.json"
+  if [ $? -ne 0 ]; then
+    echo "  the conversation stopped here -- see $label-body.json"
+    break
+  fi
+
+  # Appends the reply and, if it carried a call, a fabricated observation.
+  # Prints CALL or NOCALL so the loop can act on it without parsing prose.
+  verdict=$(python3 - "$CONV" "$OUT/$label-body.json" "$turn" <<'PY'
+import json
+import re
+import sys
+
+conv = json.load(open(sys.argv[1]))
+body = json.load(open(sys.argv[2]))
+turn = int(sys.argv[3])
+
+text = body["choices"][0]["message"].get("content") or ""
+conv["messages"].append({"role": "assistant", "content": text})
+
+# The whole measurement. Anything looser -- searching for the word "function",
+# say -- would score prose about tools as a tool call and report success on a
+# model that never made one.
+match = re.search(r"<function=([A-Za-z0-9_]+)>(.*?)</function>", text, re.S)
+if match:
+    command = re.search(r"<parameter=command>(.*?)</parameter>",
+                        match.group(2), re.S)
+    command = command.group(1).strip() if command else ""
+    # Fabricated, and deliberately plausible rather than accurate: the point is
+    # whether the model keeps its shape as history grows, not whether a real
+    # filesystem agrees with it.
+    if "cat " in command or "read" in command:
+        observation = "hello"
+    elif "ls" in command:
+        observation = ("total 4\ndrwxr-xr-x 2 opencode opencode 4096 .\n"
+                       "-rw-r--r-- 1 opencode opencode 6 hello.txt")
+    else:
+        observation = ""
+    conv["messages"].append({
+        "role": "user",
+        "content": "EXECUTION RESULT of [%s]:\n%s" % (match.group(1), observation),
+    })
+    print("CALL %s" % match.group(1))
+else:
+    print("NOCALL")
+
+json.dump(conv, open(sys.argv[1], "w"))
+PY
+)
+  case "$verdict" in
+    CALL*)
+      calls=$((calls + 1))
+      echo "  parsed a tool call (${verdict#CALL })"
+      ;;
+    *)
+      # Stop here. A reply with no call is where the conversation ended --
+      # either the model finished or it lost the syntax -- and every further
+      # turn is a billed request that cannot distinguish those two. The text
+      # of this reply is what tells them apart, and it is captured.
+      echo "  no parseable tool call in this reply -- stopping"
+      first_nocall="$turn"
+      turn=$((turn + 1))
+      break
+      ;;
+  esac
+  turn=$((turn + 1))
+done
+
+completed=$((turn - 1))
+echo
+echo "  $completed turns, $calls carried a parseable tool call."
+if [ -n "$first_nocall" ]; then
+  echo "  First reply with no call: turn $first_nocall. That is either the model"
+  echo "  finishing or the model derailing, and only the text tells them apart --"
+  echo "  read $OUT/04-turn-$(printf '%02d' "$first_nocall")-body.json."
+else
+  echo "  Every reply carried a call. If it never stopped, it never decided it"
+  echo "  was finished either -- read the last body before calling this a pass."
+fi
+echo "  Turn three is where flattened history breaks if it breaks; reaching"
+echo "  turn four with calls intact is the result that matters."
+echo "  Full conversation: $CONV"
 
 say 'done'
 echo "Raw bodies, headers, and transfer metadata: $OUT"
