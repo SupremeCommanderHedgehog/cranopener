@@ -39,12 +39,13 @@ bash probe.sh ~/probe-out                  # ext4 inside the VM
 cp -r ~/probe-out /mnt/c/<wherever>/out    # once, at the end
 ```
 
-`/mnt/c` is drvfs, the bridge to Windows NTFS, and it is slow and
-semantically odd for exactly the thing step 3 does: write an 800 KB file and
-immediately hand its path to curl. That is the leading explanation for the
-2026-08-07 failure above, unproven but free to avoid — everything
-time-sensitive stays on the VM and the one crossing to Windows is a bulk copy
-after the network work is done.
+`/mnt/c` is drvfs, the bridge to Windows NTFS, and it is slow and semantically
+odd for exactly the thing step 3 does: write an 800 KB file and immediately
+hand its path to curl. This is hygiene, not a fix for a known cause — an 800 KB
+write to `/mnt/c` has since succeeded, so drvfs does not explain the 2026-08-07
+failure. It costs nothing to keep the time-sensitive work on the VM and make
+the one crossing to Windows a bulk copy after the network work is done, so do
+that; just do not treat it as the answer.
 
 Leave `TMPDIR` alone while you are at it. The probe writes the API key to a
 `mktemp` file and `chmod 600`s it so the credential never reaches a command
@@ -89,16 +90,18 @@ rejected for size is rejected before generation and billed for nothing.
 The step was lost once, on 2026-08-07, and it is worth knowing how. All three
 rungs came back `400 Invalid JSON in request body: EOF while parsing a value at
 line 1 column 0` — the endpoint complaining about a body it never received —
-while the only two requests in the run under 1 KB both succeeded. It did not
-reproduce on 2026-08-08: the same 800 KB body over the same HTTP/2 CONNECT
-tunnel to the same address went through, with `size_upload` confirming all
-800,099 bytes left the machine. The mechanism is still unproven. It is not
-curl's `Expect: 100-continue`, which curl does not send at those sizes and
-never would over HTTP/2. The correlation was with **file size**, and the failing
-run wrote its body files to a `/mnt/c` drvfs mount while the two that worked
-were a few hundred bytes — see the note on where to run this, below. A
-rejection of that exact shape now costs one retry over `--http1.1`, and
-`size_upload` next to `request_bytes` says which side of the wire lost the body.
+while the only two requests in that run under 1 KB both succeeded.
+
+**It has not reproduced since, and the mechanism is unexplained.** Two later
+runs sent the identical 800 KB body over the same HTTP/2 CONNECT tunnel to the
+same address and got 200, with `size_upload` confirming all 800,099 bytes left
+the machine. What is ruled out: curl's `Expect: 100-continue`, which curl does
+not send at those sizes and never would over HTTP/2. What is *not* established
+is the filesystem theory, tempting as the file-size correlation is — one of the
+two successful runs also wrote to `/mnt/c`, so drvfs does not by itself explain
+it. If it recurs, `size_upload` next to `request_bytes` says in one line which
+side of the wire lost the body, and a rejection of that exact shape costs one
+retry over `--http1.1`.
 
 **4 — the multi-turn run.** Run by hand, in a scratch repository. Not "does it
 parse once" — does it reach turn ten and finish something.
