@@ -28,6 +28,30 @@ run from and present only on the Linux build host, and a probe that cannot run
 at the office is worth nothing. `PROBE_MODEL` is the model id the gateway
 publishes, the same string you would pass to `cranopener -Model`.
 
+## Where to run it
+
+WSL2 on the office machine is the right host — it has curl, python3, the CA
+trust, and the proxy. But **give it an output directory on the VM's own
+filesystem, not under `/mnt/c`**:
+
+```bash
+bash probe.sh ~/probe-out                  # ext4 inside the VM
+cp -r ~/probe-out /mnt/c/<wherever>/out    # once, at the end
+```
+
+`/mnt/c` is drvfs, the bridge to Windows NTFS, and it is slow and semantically
+odd for exactly the thing step 3 does: write an 800 KB file and immediately
+hand its path to curl. This is hygiene, not a fix for a known cause — an 800 KB
+write to `/mnt/c` has since succeeded, so drvfs does not explain the 2026-08-07
+failure. It costs nothing to keep the time-sensitive work on the VM and make
+the one crossing to Windows a bulk copy after the network work is done, so do
+that; just do not treat it as the answer.
+
+Leave `TMPDIR` alone while you are at it. The probe writes the API key to a
+`mktemp` file and `chmod 600`s it so the credential never reaches a command
+line, and that only holds because WSL2's `/tmp` is ext4. Point `TMPDIR` at
+`/mnt/c` and the `chmod` silently does nothing.
+
 ## The order, and why it is that order
 
 Steps 1 to 3 take minutes and answer questions outstanding since the first
@@ -52,25 +76,32 @@ is two different findings — a reply carrying `tool_calls` means tools genuinel
 work, while a 200 with no `tool_calls` means the parameter was silently
 ignored, which still requires prompt-mode tool calling.
 
-**3 — the context window.** Still unmeasured, and it decides whether ~5,200
-tokens of tool schema per turn is 4% of the window or 64%. The probe walks a
-ladder of oversized requests largest first and stops at the first one accepted,
-so the good case costs a single request and only a rejection costs another —
-and a request rejected for size is rejected before generation, so it is billed
-for nothing. `spike/RESULTS.md`, which is local and gitignored, holds the table
-this number turns into an answer.
+**3 — the context window.** **Measured 2026-08-08: at least ~160,000 tokens.**
+An 800 KB body was accepted at the top rung — `HTTP 200`, `finish_reason:
+stop`, `prompt_tokens: 160001` — so ~5,200 tokens of tool schema per turn is
+about 3% of the window and the schemas are a rounding error. `spike/RESULTS.md`,
+local and gitignored, holds the table this number turns into an answer.
 
-This is the step the August run lost. All three rungs came back `400 Invalid
-JSON in request body: EOF while parsing a value at line 1 column 0` — the
-endpoint complaining about a body it never received — while both smaller
-requests, the only two under 1 KB in the whole run, succeeded. The mechanism is
-still unknown: curl sends no `Expect: 100-continue` at those sizes, and nothing
-captured recorded whether the bytes ever left the machine. So a rejection of
-that exact shape now costs one retry over HTTP/1.1, because every failure of it
-so far was HTTP/2 through a CONNECT tunnel. If the retry succeeds, the window
-is at least that rung and large requests need `--http1.1` to get through. If it
-fails the same way, `size_upload` in the two meta files says which side of the
-wire lost the body.
+Re-run it anyway. It is one request in the good case, the endpoint can change
+under us, and the ladder walks largest first and stops at the first size
+accepted — so a smaller answer next time costs one extra request, and a request
+rejected for size is rejected before generation and billed for nothing.
+
+The step was lost once, on 2026-08-07, and it is worth knowing how. All three
+rungs came back `400 Invalid JSON in request body: EOF while parsing a value at
+line 1 column 0` — the endpoint complaining about a body it never received —
+while the only two requests in that run under 1 KB both succeeded.
+
+**It has not reproduced since, and the mechanism is unexplained.** Two later
+runs sent the identical 800 KB body over the same HTTP/2 CONNECT tunnel to the
+same address and got 200, with `size_upload` confirming all 800,099 bytes left
+the machine. What is ruled out: curl's `Expect: 100-continue`, which curl does
+not send at those sizes and never would over HTTP/2. What is *not* established
+is the filesystem theory, tempting as the file-size correlation is — one of the
+two successful runs also wrote to `/mnt/c`, so drvfs does not by itself explain
+it. If it recurs, `size_upload` next to `request_bytes` says in one line which
+side of the wire lost the body, and a rejection of that exact shape costs one
+retry over `--http1.1`.
 
 **4 — the multi-turn run.** Run by hand, in a scratch repository. Not "does it
 parse once" — does it reach turn ten and finish something.
