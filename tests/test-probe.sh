@@ -1,10 +1,7 @@
 #!/usr/bin/env bash
-# The office probe gets one run a month, and the August run spent step 3
-# without producing an answer OR a diagnosis: three requests arrived at the
-# upstream with empty bodies, and nothing captured said whether curl had sent
-# the bytes. These assertions exist so that failure cannot recur silently --
-# they pin what the probe records about the REQUEST, which is the half it was
-# not recording.
+# The office probe gets one run a month. These assertions pin what it records
+# about the REQUEST -- the half that was missing when August produced neither
+# an answer nor a diagnosis. See docs/hazards.md.
 #
 # Runs against a local stub, so it is offline and belongs in run-all.sh.
 set -uo pipefail
@@ -142,11 +139,9 @@ PY
 assert_eq 'a body that could not be built is never posted' '0' "$ladder_posts"
 
 # --- the August failure shape, reproduced ----------------------------------
-# A large body answered with a complaint about an empty one. size_upload now
-# says whether curl sent the bytes, but knowing that in September and still
-# having no window measurement costs another month. One retry over HTTP/1.1 --
-# rejected before generation, so billed for nothing -- is what turns the next
-# visit from a diagnosis into an answer.
+# A large body answered with a complaint about an empty one. Diagnosing that
+# in September and still having no measurement costs another month, so the
+# retry is what turns the next visit from a diagnosis into an answer.
 OUT3="$WORK/out3"
 : > "$REQ_LOG"
 kill "$STUB_PID" 2>/dev/null
@@ -241,11 +236,9 @@ assert_ok 'a step that sends nothing clears a stale status from an earlier run' 
   test ! -e "$STALE"
 
 # --- the exit status tells probe failure from endpoint failure -------------
-# Exit 1 is documented as "the endpoint never answered a plain request". A
-# probe that could not build the request never asked, and saying otherwise in
-# the exit status is the same conflation the guard exists to prevent, just
-# moved somewhere a script would read it. A directory where the body file
-# belongs makes the write fail the way a full disk or a bad path would.
+# Exit 1 means "the endpoint never answered"; a probe that could not build the
+# request never asked. A directory where the body file belongs fails the write
+# the way a full disk would.
 OUT7="$WORK/out7"
 mkdir -p "$OUT7/01b-chat-req.json"
 bash "$PROBE" "$OUT7" >/dev/null 2>&1
@@ -253,11 +246,9 @@ assert_eq 'a probe that never asked does not exit as if the endpoint failed' \
   '3' "$?"
 
 # --- step 4 actually runs -------------------------------------------------
-# Until 2026-08-08 step 4 was a `cat` of instructions telling the operator to
-# run `cranopener` by hand -- a command needing pwsh, podman and a 6GB image,
-# none of which exist in the WSL2 VM the rest of the kit runs in. Two office
-# visits produced no answer. These assertions exist so it cannot quietly become
-# documentation again.
+# It was once a `cat` of instructions needing software the WSL2 VM does not
+# have, and two office visits produced no answer. These assertions exist so it
+# cannot quietly become documentation again.
 OUT8="$WORK/out8"
 kill "$STUB_PID" 2>/dev/null
 rm -f "$PORT_FILE"
@@ -301,16 +292,12 @@ PY
 assert_eq 'the conversation carries its history forward' '9' "$history"
 
 # --- step 4 attributes every ending to the right layer ---------------------
-# THE invariant, and the one that costs a month when it breaks: the summary may
-# claim "Every reply carried a call" only when every attempted turn returned
-# 2xx AND parsed a call. Every other ending -- a 502, an unreadable body, a
-# reply truncated by our own token cap, a body the probe could not build --
-# names the probe or the transport. Reported as model behaviour instead, a
-# failed office run reads at a desk a week later as a clean pass, and the
-# endpoint is a month away.
+# THE invariant: the summary may claim "Every reply carried a call" only when
+# every attempted turn returned 2xx AND parsed a call. Every other ending
+# names the probe or the transport -- reported as model behaviour instead, a
+# failed office run reads as a clean pass a month later.
 #
-# Example tests were what let this cluster through the first time. This is the
-# combinatorial form: every failure mode, one loop, same two assertions.
+# Combinatorial, not by-example: example tests let this cluster through once.
 start_stub() {
   kill "$STUB_PID" 2>/dev/null
   rm -f "$PORT_FILE"
@@ -406,5 +393,25 @@ PY
 )
 assert_eq 'a write is not answered as though the file had been read back' \
   '|hello||LISTING' "$observation"
+
+# --- the probe runs where only curl and python3 exist ----------------------
+# jq is on this machine, on CI, and on the Linux build host, and absent from
+# the office Windows machines and the WSL2 VM the probe runs in. So a jq
+# dependency added here passes every check we have and fails at the office --
+# a month later, on the one run that mattered.
+PROBE_CODE="$WORK/probe-code.sh"
+grep -vE '^[[:space:]]*#' "$PROBE" > "$PROBE_CODE"
+
+# Word-boundary match at a command position rather than a bare substring: the
+# header explains at length that jq is NOT used, and that sentence must not
+# fail its own test.
+assert_not_ok 'probe.sh never invokes jq' \
+  grep -qE '(^|[|&;(`]|[[:space:]])jq([[:space:]]|$)' "$PROBE_CODE"
+
+# The declared prerequisites, which is the other half: a dependency the probe
+# checks for is one the operator is told about before the request goes out,
+# and one that grows silently is how the first half gets defeated.
+declared=$(sed -n 's/^for tool in \(.*\); do$/\1/p' "$PROBE")
+assert_eq 'probe.sh requires only curl and python3' 'curl python3' "$declared"
 
 finish

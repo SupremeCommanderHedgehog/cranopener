@@ -1,12 +1,10 @@
-# Pure functions shared by cranopener.ps1 and install.ps1. Kept out of both so
-# they can be unit tested without invoking podman or writing to an install
-# directory.
+# Pure functions shared by cranopener.ps1 and install.ps1, unit tested without
+# podman or an install directory.
 #
-# The rule for what belongs here is decidability, not tidiness: anything that
-# decides something -- what a correct install looks like, whether a gateway is
-# ready -- lives here so a test can pin it. Anything that shells out stays in
-# its script. Every function below was inline somewhere first, and every one of
-# them was the subject of a bug that a unit test would have caught.
+# What belongs here is decidability: anything that DECIDES something lives
+# here so a test can pin it, anything that shells out stays in its script.
+# Every function below was inline first, and every one of them had a bug a
+# unit test would have caught.
 
 function ConvertTo-PodmanPath {
     <#
@@ -281,19 +279,12 @@ function Get-InstallBytes {
     )
 
     if ($Relative -eq 'gateway.yaml') {
-        # gateway.yaml ships with a placeholder because hostPath needs a
-        # literal absolute path and kube YAML has no interpolation. The value
-        # must be the path the podman machine sees, not the Windows one:
-        # `podman run -v` translates Windows paths but hostPath does not, and
-        # C:/x is looked up as /C:/x.
+        # A placeholder because hostPath needs a literal path and kube YAML has
+        # no interpolation. It must be the path the VM sees: hostPath does not
+        # translate Windows paths. See docs/hazards.md.
         $text = (Get-Content $TemplatePath -Raw).Replace('__CRANOPENER_HOME__', $VmHome)
-        # -Raw in, UTF8-no-BOM bytes out: the file's own LF endings pass
-        # through untouched. Reading into a string array and writing it back
-        # would re-join with CRLF, and the launcher's marker regex is anchored
-        # per line -- the gateway would then fail with "no
-        # __CRANOPENER_GATEWAY_ENV__ marker" while the marker sits plainly
-        # visible in the file. The launcher tolerates CRLF too; neither guard
-        # stands alone.
+        # -Raw in, UTF8-no-BOM out, so the file's LF endings survive. A string
+        # array would re-join with CRLF and break the launcher's marker regex.
         return (New-Object System.Text.UTF8Encoding $false).GetBytes($text)
     }
 
@@ -352,10 +343,8 @@ function Get-HarnessForModel {
 
     if ([string]::IsNullOrWhiteSpace($Model)) { return 'opencode' }
 
-    # Trimmed before matching because this function's two outcomes are not
-    # equally safe. Falling through to opencode is the failure it exists to
-    # prevent, so a stray leading space -- from a quoted argument or a copied
-    # model id -- must not be the thing that causes it.
+    # Trimmed first: the two outcomes are not equally safe, and a stray space
+    # must not be what causes the fall-through to opencode.
     $Model = $Model.Trim()
 
     foreach ($ns in $PromptModeNamespaces) {

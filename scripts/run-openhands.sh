@@ -1,37 +1,25 @@
 #!/usr/bin/env bash
 # Runs INSIDE the image. The one stable interface in front of the OpenHands CLI.
 #
+# Runs one agent task headlessly and reports a verdict that means what it says.
+# The OpenHands CLI exits 0 when the LLM fails, has no usable bound on an
+# unattended run, and degrades quietly when its settings file does not
+# validate; this script reads the --json event stream and takes its verdict
+# from that instead. See docs/hazards.md for the measurements behind each.
+#
 # The launcher calls this and nothing else, so an upstream flag rename is a
-# one-line change here rather than a change to a PowerShell script that cannot
-# be tested without a container engine. The V0 layout most published examples
-# describe has already been removed upstream; assume this will move again.
-#
-# It exists for three reasons that are not about tidiness. Each one is a way an
-# unattended run reports success while having achieved nothing, at a site that
-# can only be visited monthly:
-#
-#   1. The CLI exits 0 when the LLM fails. Measured: a run that took a hard
-#      HTTP 400 on every single turn still exited zero. Anything that trusts
-#      `$?` will ship a broken configuration and report green, so the verdict
-#      is taken from the `--json` event stream instead -- a ConversationErrorEvent
-#      is a failed run no matter what the process status says.
-#   2. There is no usable bound on an unattended run. `openhands_cli` never
-#      passes `max_iteration_per_run`, so the SDK default of 500 always
-#      applies, and the gateway's spend cap is inert because LiteLLM tracks
-#      spend in Postgres and this stack provisions none. The cap below is the
-#      only thing between an overnight run and an unbounded bill. Measured
-#      against the fake upstream: one malformed tool call the model kept
-#      repeating cost 500 real completions before the SDK's own limit fired,
-#      and the process still exited 0.
-#   3. A settings file that does not validate degrades into exactly the failure
-#      it was written to prevent. `AgentStore.load_from_disk` swallows the
-#      validation error, prints one line, returns None, and the CLI builds a
-#      default agent whose native_tool_calling is True -- which sends `tools`
-#      to an endpoint that refuses them. Nothing about that is loud, so the
-#      file is validated here, immediately before the harness reads it.
+# one-line change here rather than in a PowerShell script that cannot be
+# tested without a container engine. Assume the CLI will move again: the V0
+# layout most published examples describe has already been removed upstream.
 #
 # Usage: run-openhands.sh <model-id> <task...>
 #
+#   <model-id>   the model in litellm's dialect, INCLUDING a transport prefix
+#                -- e.g. openai/provider-a/some-model. Refused without one.
+#   <task...>    the whole remaining argument list, used verbatim as the task.
+#                There is no interactive mode and no `run` verb.
+#
+# Environment:
 #   CRANOPENER_LLM_BASE_URL   endpoint, default the gateway on the pod's shared
 #                             network namespace. Never left unset: the SDK's
 #                             own default is a vendor cloud endpoint, so an
@@ -48,6 +36,10 @@
 #                             use the settings file already on disk instead of
 #                             generating one. Still validated -- the check
 #                             never relaxes, only the generation is skipped.
+#   CRANOPENER_OPENHANDS_GENERATOR
+#                             path to the settings generator inside the image.
+#   CRANOPENER_OPENHANDS_PYTHON
+#                             the interpreter that has the SDK installed.
 #   OPENHANDS_PERSISTENCE_DIR where agent_settings.json lives, default
 #                             $HOME/.openhands.
 #   OPENHANDS_WORK_DIR        the workspace, default /workspace.
@@ -90,16 +82,13 @@ PERSISTENCE_DIR="${OPENHANDS_PERSISTENCE_DIR:-$HOME/.openhands}"
 WORK_DIR="${OPENHANDS_WORK_DIR:-/workspace}"
 SETTINGS="$PERSISTENCE_DIR/agent_settings.json"
 GENERATOR="${CRANOPENER_OPENHANDS_GENERATOR:-/usr/local/lib/cranopener/make-openhands-settings.py}"
-# The interpreter that has the SDK installed. The generator constructs a real
-# openhands.sdk.Agent, so the system python3 fails with an ImportError that
-# reads like a broken image rather than like a wrong path.
+# The interpreter with the SDK installed. The generator builds a real
+# openhands.sdk.Agent, so system python3 fails with a misleading ImportError.
 PYTHON="${CRANOPENER_OPENHANDS_PYTHON:-/usr/local/bin/openhands-python}"
 
-# The launcher derives the harness from the model namespace, but the litellm
-# prefix is a separate axis and getting it wrong is the quietest failure in
-# this whole path: litellm gives up before opening a socket, so the run makes
-# zero requests, reports no error, and exits 0. Checked here because the
-# operator can also invoke this directly.
+# The quietest failure in this path: without a prefix litellm gives up before
+# opening a socket, so the run sends nothing and exits 0. Checked here too
+# because the operator can invoke this directly.
 case "$MODEL" in
   */*) : ;;
   *)
@@ -111,9 +100,8 @@ case "$MODEL" in
     ;;
 esac
 
-# Checked here rather than left to the run: a missing binary surfaces as a
-# stream with no events in it, which is the same shape as the model prefix
-# failure below and would send the reader to the wrong place.
+# A missing binary surfaces as a stream with no events, the same shape as the
+# model-prefix failure above, so name it here instead.
 if ! command -v openhands >/dev/null 2>&1; then
   echo "run-openhands.sh: no openhands on PATH" >&2
   exit 2
@@ -139,25 +127,17 @@ esac
 
 export OPENHANDS_PERSISTENCE_DIR="$PERSISTENCE_DIR"
 export OPENHANDS_WORK_DIR="$WORK_DIR"
-# The startup banner goes to the same stdout as the JSONL event stream. The
-# reader below ignores anything that is not a JSON object, so this is tidiness
-# rather than correctness -- but the stream is also what a human reads after an
-# unattended run, and a box-drawn advert at the top of it is noise.
+# The banner shares stdout with the JSONL stream. Tidiness, not correctness --
+# the reader ignores non-JSON -- but the stream is what a human reads after.
 export OPENHANDS_SUPPRESS_BANNER=1
 
-# litellm fetches its model cost map from raw.githubusercontent.com at import.
-# It falls back to a bundled copy, but the attempt is a network call to
-# somewhere that is not the configured base URL, and behind the target site's
-# proxy it is a delay on every single run for a table used only to price
-# tokens nobody is billing here.
+# litellm otherwise fetches its cost map from raw.githubusercontent.com at
+# import: a delay on every run, behind a proxy, for a table nobody bills from.
 export LITELLM_LOCAL_MODEL_COST_MAP=True
 
-# The SDK clones github.com/OpenHands/extensions for its public skills on
-# startup. There is no environment variable to switch that off -- checked
-# against the installed source -- and it degrades to a logged error when the
-# host is unreachable, which is what happens here. What it must never do is
-# stop and ask for credentials: an unattended run has nobody to answer, and
-# git will wait forever.
+# The SDK clones its public skills repo on startup and cannot be told not to.
+# Unreachable degrades to a logged error, which is fine; prompting for
+# credentials would hang an unattended run forever, which is not.
 export GIT_TERMINAL_PROMPT=0
 
 # --- 1. the settings file --------------------------------------------------
@@ -172,9 +152,8 @@ else
     echo "run-openhands.sh: no settings generator at $GENERATOR" >&2
     exit 2
   fi
-  # --api-key-env, not --api-key: /proc/<pid>/cmdline is world-readable and
-  # /proc/<pid>/environ is not, so passing the value here would publish it to
-  # every other uid in the container for the lifetime of the call.
+  # --api-key-env, not --api-key: /proc/<pid>/cmdline is world-readable,
+  # /proc/<pid>/environ is not.
   CRANOPENER_LLM_API_KEY="${CRANOPENER_LLM_API_KEY:-unused}" \
   "$PYTHON" "$GENERATOR" \
       --model "$MODEL" \
@@ -186,9 +165,8 @@ else
   }
 fi
 
-# Validated whether it was generated or supplied. Generation proves what was
-# written; this proves what is about to be read, and those are the same file
-# only until somebody mounts a different one.
+# Validated whether generated or supplied: generation proves what was written,
+# this proves what is about to be read.
 if [ ! -f "$SETTINGS" ]; then
   echo "run-openhands.sh: $SETTINGS does not exist. The CLI would not fail on" >&2
   echo "  that -- it would build a default agent with native_tool_calling=True" >&2
@@ -206,11 +184,9 @@ mkfifo "$FIFO"
 
 HARNESS_PID=""
 
-# Invoked by the `trap cleanup EXIT` four lines down, which shellcheck's
-# reachability analysis does not follow. Both codes name the same false
-# positive and both are needed: 0.11 reports SC2329 against the definition,
-# 0.10 reports SC2317 against each statement in the body. Dropping either one
-# leaves the suite red on one of the two machines that run it.
+# Invoked by the `trap cleanup EXIT` below, which shellcheck does not follow.
+# Both codes are needed -- different versions report different ones. See
+# docs/hazards.md.
 # shellcheck disable=SC2317,SC2329
 cleanup() {
   if [ -n "$HARNESS_PID" ] && kill -0 "$HARNESS_PID" 2>/dev/null; then
@@ -223,30 +199,24 @@ trap cleanup EXIT
 stop_harness() {
   kill -0 "$HARNESS_PID" 2>/dev/null || return 0
   kill -TERM "$HARNESS_PID" 2>/dev/null
-  # A harness blocked writing into a FIFO nobody is reading any more will not
-  # notice a TERM until it returns from write(2), so the KILL is not optional.
+  # A harness blocked writing into a FIFO nobody reads will not notice a TERM
+  # until write(2) returns, so the KILL is not optional.
   local waited=0
   while kill -0 "$HARNESS_PID" 2>/dev/null && [ "$waited" -lt 100 ]; do
     sleep 0.1
     waited=$((waited + 1))
   done
   kill -KILL "$HARNESS_PID" 2>/dev/null
-  # Signals the process, not the process group. A command the agent had already
-  # spawned can outlive this, which is survivable only because the harness runs
-  # one task per container and the container exits with this script. If this
-  # ever runs in something long-lived, that assumption has to be revisited
-  # rather than inherited.
+  # The process, not the process group: a command the agent spawned can outlive
+  # this. Survivable only because the container exits with this script.
 }
 
-# --json makes every event a line of JSON on stdout -- interleaved with the
-# CLI's own terminal chatter, which is why only lines that begin with `{` are
-# parsed below. Its stderr is a separate stream on purpose: merging it would
-# put log lines inside the JSONL and make the only machine-readable evidence of
-# what happened unparseable.
+# --json puts every event on stdout, interleaved with the CLI's own chatter --
+# hence the `{` test below. stderr stays a separate stream: merging it would
+# make the only machine-readable evidence of the run unparseable.
 #
-# `timeout` is the backstop the event cap cannot be: the cap only fires on
-# something the harness prints, so a loop that prints nothing would run until
-# the container did.
+# `timeout` is the backstop the event cap cannot be: the cap fires only on
+# something the harness prints, so a silent loop would run until the container did.
 timeout "$TIMEOUT_SECONDS" openhands --headless --json -t "$TASK" \
   >"$FIFO" 2>"$HARNESS_STDERR" &
 HARNESS_PID=$!
@@ -257,35 +227,24 @@ errors=0
 capped=0
 
 while IFS= read -r line; do
-  # Passed through unmodified. The stream is the record of the run, and an
-  # adapter that summarizes it away leaves nothing to diagnose from.
+  # Unmodified: the stream is the record, and summarizing it away leaves
+  # nothing to diagnose from.
   printf '%s\n' "$line"
 
   case "$line" in '{'*) ;; *) continue ;; esac
   kind=$(printf '%s' "$line" | jq -r '.kind // empty' 2>/dev/null)
 
-  # ITERATION MARKER: every event, not one chosen kind. Measured, not guessed.
-  # A run whose tool calls all parsed emitted one ActionEvent per completion,
-  # which makes ActionEvent look like the marker. It is not. A run where the
-  # model repeated one malformed tool call emitted a *user* MessageEvent per
-  # completion carrying the validation error, and kept going: 500 completions
-  # billed, one single ActionEvent in the whole stream. Any cap counting
-  # ActionEvent would have watched that happen and said nothing.
-  #
-  # No event kind is one-to-one with an agent step. But a step cannot advance
-  # without emitting at least one event -- that is how the SDK reports what it
-  # did -- so counting every event bounds steps from above, which is the
-  # direction a safety bound has to err in. It over-counts a healthy run,
-  # where an action and its observation are two events for one step, so the
-  # cap is a bound and not a budget: set it well above what the task needs.
+  # ITERATION MARKER: every event, not one chosen kind. Counting ActionEvent
+  # would have missed 500 billed completions -- measured, see docs/hazards.md.
+  # This bounds steps from above, so the cap is a bound and not a budget: set
+  # it well above what the task needs.
   events=$((events + 1))
 
   case "$kind" in
     ConversationErrorEvent)
       errors=$((errors + 1))
-      # code and detail both printed: a wrapper that fails without saying why
-      # is worse than none, because the next person assumes the endpoint is
-      # down and goes to look at the gateway.
+      # Both code and detail: a wrapper that fails without saying why sends
+      # the next person to the gateway.
       printf '%s' "$line" \
         | jq -r '"run-openhands.sh: conversation error: code=\(.code // "?") detail=\(.detail // "?")"' >&2
       ;;
@@ -307,22 +266,12 @@ HARNESS_PID=""
 
 # --- 3. a verdict that means what it says ----------------------------------
 #
-# THE ORDER OF THIS BLOCK IS THE CONTRACT, not an artefact of the sequence the
-# checks happened to be written in. Several of these conditions hold at once in
-# ordinary failures -- a run that errors on every turn also burns through the
-# cap; a harness that blackholes emits no events AND is killed by the wall
-# clock -- and whichever is tested first is the only thing the operator is
-# told. So they are tested most specific first, and a condition that did not
-# win is printed underneath the one that did rather than dropped.
-#
-# What getting this wrong costs is not a wrong exit status, which nothing
-# reads. It is a wrong instruction, at a site reachable about once a month. The
-# order this block used to have told a run that errored on every turn and then
-# hit the cap to "raise the cap deliberately, or shorten the task" -- which
-# invites spending more money on a configuration that cannot work -- and told a
-# harness that blackholed and was killed by `timeout` to check its model
-# prefix, which was not wrong with it. tests/test-run-openhands-verdict.sh
-# drives every one of these and pins the order.
+# THE ORDER OF THIS BLOCK IS THE CONTRACT. Several conditions hold at once in
+# ordinary failures, and whichever is tested first is the only thing the
+# operator is told -- so: most specific first, and a condition that did not win
+# is printed underneath the one that did rather than dropped. What a wrong
+# order costs is a wrong instruction at a site reachable once a month; see
+# docs/hazards.md. tests/test-run-openhands-verdict.sh pins the order.
 stderr_tail() {
   if [ -s "$HARNESS_STDERR" ]; then
     echo "--- harness stderr (last 20 lines) ---" >&2
@@ -330,10 +279,8 @@ stderr_tail() {
   fi
 }
 
-# Printed under whichever verdict won. The cap is the one that has to survive
-# losing: an errored run that also hit the cap is an errored run, but without
-# this the event count in front of the operator is unexplained and the run
-# looks like it simply stopped.
+# Printed under whichever verdict won. An errored run that also hit the cap is
+# an errored run -- but without this its event count looks unexplained.
 also_capped() {
   [ "$capped" = "1" ] || return 0
   echo "  This run also stopped at the iteration cap," >&2
@@ -342,21 +289,18 @@ also_capped() {
   echo "  same failure." >&2
 }
 
-# 1. Conversation errors, ahead of everything else. Whatever else was also true
-#    of the run is either a consequence of the errors or a coincidence, and
-#    naming it instead aims the next move at the wrong thing.
+# 1. Conversation errors, ahead of everything else: anything else that was
+#    also true is a consequence or a coincidence.
 if [ "$errors" -gt 0 ]; then
-  # The harness's own status is printed rather than used. It is routinely 0
-  # here, which is the whole reason this script exists.
+  # Printed, not used. It is routinely 0 here -- the reason this script exists.
   echo "run-openhands.sh: $errors conversation error(s); the harness itself exited $harness_rc." >&2
   also_capped
   stderr_tail
   exit 4
 fi
 
-# 2. The iteration cap. This run killed the harness on purpose to enforce it,
-#    so harness_rc from here down is the signal we sent rather than anything
-#    the run did -- which is why both status tests sit underneath this one.
+# 2. The iteration cap. We killed the harness to enforce it, so harness_rc
+#    below is our own signal -- hence both status tests sit underneath this.
 if [ "$capped" = "1" ]; then
   echo "run-openhands.sh: stopped at the iteration cap, with no conversation errors." >&2
   echo "  CRANOPENER_MAX_ITERATIONS=$MAX_ITERATIONS, reached after $events stream" >&2
@@ -368,12 +312,9 @@ if [ "$capped" = "1" ]; then
   exit 5
 fi
 
-# 3. The wall clock, ahead of the zero-events check below rather than after it.
-#    A harness that blackholes -- a dropped proxy connection, a DNS timeout on
-#    the LLM path -- emits nothing and is then killed by `timeout`, and the
-#    zero-events message would send the reader to the model prefix and the base
-#    URL, neither of which is wrong with it. 124 is `timeout`'s own status for
-#    "the bound fired", so this is the one condition that reports itself.
+# 3. The wall clock, ahead of the zero-events check: a blackholed harness emits
+#    nothing and is then killed, and the zero-events message would blame the
+#    model prefix. 124 is `timeout`'s own status, so this condition self-reports.
 if [ "$harness_rc" -eq 124 ]; then
   echo "run-openhands.sh: stopped at the wall-clock bound," >&2
   echo "  CRANOPENER_TIMEOUT_SECONDS=$TIMEOUT_SECONDS, after $events stream events." >&2
@@ -387,12 +328,10 @@ if [ "$harness_rc" -eq 124 ]; then
   exit 5
 fi
 
-# 4. A harness that failed and said so, also ahead of the zero-events check and
-#    for the same reason: a CLI that died during startup -- an unreadable
-#    settings file, an import error out of a half-built image -- emits no
-#    events either, and its own status with its stderr is a better lead than a
-#    guess about the model prefix. The zero-events diagnosis below is
-#    specifically about a harness that exited CLEANLY having sent nothing.
+# 4. A harness that failed and said so, ahead of zero-events for the same
+#    reason: a CLI that died during startup emits nothing either, and its own
+#    status and stderr are a better lead. Zero-events below is specifically
+#    about a harness that exited CLEANLY having sent nothing.
 if [ "$harness_rc" -ne 0 ]; then
   echo "run-openhands.sh: harness exited $harness_rc after $events stream events" >&2
   stderr_tail
@@ -400,11 +339,9 @@ if [ "$harness_rc" -ne 0 ]; then
 fi
 
 # 5. Zero events from a harness that exited 0 -- what is left once every louder
-#    failure above has been ruled out, and trap 1 in the shape it actually
-#    takes: a model prefix litellm does not recognise makes the client give up
-#    before opening a socket, and the CLI exits 0 having sent nothing. It looks
-#    exactly like a clean run that had nothing to say, which is the most
-#    expensive way to be wrong here.
+#    failure is ruled out. Usually an unrecognised model prefix: the client
+#    gives up before opening a socket, and this looks exactly like a clean run
+#    that had nothing to say.
 if [ "$events" -eq 0 ]; then
   echo "run-openhands.sh: the harness exited 0 having emitted no events at all --" >&2
   echo "  it did not get as far as a conversation. Check the model prefix and" >&2

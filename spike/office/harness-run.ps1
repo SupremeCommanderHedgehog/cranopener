@@ -3,20 +3,22 @@
   The real-harness half of step 4, with its prerequisites checked first.
 
 .DESCRIPTION
-  probe.sh step 4 measures whether the MODEL keeps emitting parseable tool
-  calls across a flattened conversation. That is the question a trip cannot
-  answer twice, and it runs over curl from the WSL2 VM.
+  Step 4b of the office kit: one agent task through the real OpenHands
+  harness, in a container, against the gateway.
 
-  This is the other half: the same task through the actual OpenHands harness,
-  in a container, against the gateway. It is a separate script because it needs
-  an entirely different machine's worth of software -- pwsh, podman, the built
-  image, and an installed ~/.cranopener -- and until 2026-08-08 that fact was
-  hidden inside a block of text probe.sh printed at the end of a run. Two
-  office visits produced no step 4 as a result.
+  probe.sh answers step 4a -- whether the MODEL keeps emitting parseable tool
+  calls across a flattened conversation -- over curl, from the WSL2 VM. This
+  is the other half, and it is a separate script because it needs an entirely
+  different machine's worth of software: pwsh, podman, the built image, and an
+  installed ~/.cranopener, none of which exist in that VM.
 
-  Everything is checked before anything is started. At the office the failure
-  that costs a month is not "this did not work", it is "this did not work and
-  I found out forty minutes in".
+  Every prerequisite is checked before anything is started, and all of them
+  are reported at once. At the office the failure that costs a month is not
+  "this did not work", it is "this did not work and I found out forty minutes
+  in".
+
+  The transcript is written to -OutFile whatever happens, including when the
+  launcher refuses to start. That log is the only record of the step.
 
 .PARAMETER Model
   The model id as the gateway names it -- the same string you would pass to
@@ -132,13 +134,9 @@ Write-Both 'Keep the log whatever happens. It is the only record of this step,' 
 Write-Both 'and the next chance to produce one is a month away.' 'Yellow'
 Write-Both ''
 
-# No `run` verb: on the OpenHands path the whole argument list is the task, and
-# the launcher refuses the combination rather than absorbing it.
-#
-# Wrapped because cranopener.ps1 signals its refusals with `throw` -- a missing
-# install, a contradictory flag, a gateway that would not start. With
-# $ErrorActionPreference = 'Stop' that unwinds straight through this script:
-# $rc is never read, `exit` never runs, and the log is left empty.
+# No `run` verb: on the OpenHands path the whole argument list is the task.
+# Wrapped because cranopener.ps1 signals refusals with `throw`, which would
+# otherwise unwind past $rc and leave the log empty.
 $rc = 0
 try {
     & $Launcher -Model $Model $Task 2>&1 | Tee-Object -FilePath $OutFile -Append
