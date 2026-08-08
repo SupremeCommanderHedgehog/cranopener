@@ -1,0 +1,9 @@
+{
+  "_comment": "Three replies carrying OpenHands-syntax tool calls, then one that carries none. Turn four is where the probe must notice the conversation stopped calling tools -- and turn three is where flattened history breaks against a real model, so a script that runs out before then would prove nothing.",
+  "responses": [
+    "I will look at the workspace first.\n\n<function=terminal>\n<parameter=command>ls -la /workspace</parameter>\n<parameter=security_risk>LOW</parameter>\n<parameter=summary>List the workspace</parameter>\n</function>",
+    "Now I will create the file.\n\n<function=terminal>\n<parameter=command>printf 'hello\\n' > /workspace/hello.txt</parameter>\n<parameter=security_risk>LOW</parameter>\n<parameter=summary>Create hello.txt</parameter>\n</function>",
+    "Let me read it back.\n\n<function=terminal>\n<parameter=command>cat /workspace/hello.txt</parameter>\n<parameter=security_risk>LOW</parameter>\n<parameter=summary>Read hello.txt back</parameter>\n</function>",
+    "The file exists and contains hello. TASK COMPLETE"
+  ]
+}

@@ -252,4 +252,159 @@ bash "$PROBE" "$OUT7" >/dev/null 2>&1
 assert_eq 'a probe that never asked does not exit as if the endpoint failed' \
   '3' "$?"
 
+# --- step 4 actually runs -------------------------------------------------
+# Until 2026-08-08 step 4 was a `cat` of instructions telling the operator to
+# run `cranopener` by hand -- a command needing pwsh, podman and a 6GB image,
+# none of which exist in the WSL2 VM the rest of the kit runs in. Two office
+# visits produced no answer. These assertions exist so it cannot quietly become
+# documentation again.
+OUT8="$WORK/out8"
+kill "$STUB_PID" 2>/dev/null
+rm -f "$PORT_FILE"
+PROBE_STUB_SCRIPT=tests/probe-stub/multi-turn-script.json \
+  python3 tests/probe-stub/server.py "$PORT_FILE" "$REQ_LOG" &
+STUB_PID=$!
+for _ in $(seq 1 50); do
+  [ -s "$PORT_FILE" ] && break
+  sleep 0.1
+done
+PORT="$(cat "$PORT_FILE")"
+export PROBE_BASE_URL="http://127.0.0.1:$PORT/v1"
+
+PROBE_CONTEXT_LADDER='2000' PROBE_MAX_TURNS=6 bash "$PROBE" "$OUT8" >/dev/null 2>&1
+
+assert_ok 'step 4 issues real requests rather than printing instructions' \
+  test -s "$OUT8/04-turn-01-meta.txt"
+
+# Turn three is where flattened history breaks. A step that stops before it
+# cannot see the thing the visit exists to see.
+assert_ok 'the conversation reaches turn four' \
+  test -s "$OUT8/04-turn-04-meta.txt"
+
+# The measurement itself: three scripted replies carry calls, the fourth does
+# not. Scoring the fourth as a call would report a derail as a success.
+assert_ok 'it counts exactly the replies that carried a tool call' \
+  grep -q '4 turns, 3 carried a parseable tool call' "$OUT8/00-probe-log.txt"
+
+assert_ok 'it names the first reply with no call' \
+  grep -q 'First reply with no call: turn 4' "$OUT8/00-probe-log.txt"
+
+# History has to accumulate, or every turn is turn one and the thing being
+# measured never happens. Two messages seeded, then two per turn.
+history=$(python3 - "$OUT8/04-conversation.json" <<'PY'
+import json
+import sys
+
+print(len(json.load(open(sys.argv[1]))["messages"]))
+PY
+)
+assert_eq 'the conversation carries its history forward' '9' "$history"
+
+# --- step 4 attributes every ending to the right layer ---------------------
+# THE invariant, and the one that costs a month when it breaks: the summary may
+# claim "Every reply carried a call" only when every attempted turn returned
+# 2xx AND parsed a call. Every other ending -- a 502, an unreadable body, a
+# reply truncated by our own token cap, a body the probe could not build --
+# names the probe or the transport. Reported as model behaviour instead, a
+# failed office run reads at a desk a week later as a clean pass, and the
+# endpoint is a month away.
+#
+# Example tests were what let this cluster through the first time. This is the
+# combinatorial form: every failure mode, one loop, same two assertions.
+start_stub() {
+  kill "$STUB_PID" 2>/dev/null
+  rm -f "$PORT_FILE"
+  env "$@" PROBE_STUB_SCRIPT=tests/probe-stub/multi-turn-script.json \
+    python3 tests/probe-stub/server.py "$PORT_FILE" "$REQ_LOG" &
+  STUB_PID=$!
+  for _ in $(seq 1 50); do
+    [ -s "$PORT_FILE" ] && break
+    sleep 0.1
+  done
+  PORT="$(cat "$PORT_FILE" 2>/dev/null)"
+  export PROBE_BASE_URL="http://127.0.0.1:$PORT/v1"
+}
+
+run_step4() {
+  PROBE_CONTEXT_LADDER='2000' PROBE_MAX_TURNS=6 bash "$PROBE" "$1" >/dev/null 2>&1
+}
+
+case_n=0
+for spec in \
+  'PROBE_STUB_FAIL_TURN=2|failed on the wire or was refused' \
+  'PROBE_STUB_BAD_BODY_TURN=2|could not be read' \
+  'PROBE_STUB_TRUNCATE_TURN=2|hit max_tokens'
+do
+  case_n=$((case_n + 1))
+  knob="${spec%%|*}"
+  marker="${spec#*|}"
+  out="$WORK/attr$case_n"
+
+  start_stub "$knob"
+  run_step4 "$out"
+
+  assert_ok "$knob names the real cause" \
+    grep -q "$marker" "$out/00-probe-log.txt"
+
+  assert_not_ok "$knob is not reported as a clean pass" \
+    grep -q 'Every reply carried a call' "$out/00-probe-log.txt"
+done
+
+# The fourth mode: the probe cannot build the turn's body, so nothing is sent.
+# A directory where the request file belongs fails the write the way a full
+# disk or a bad path would.
+out="$WORK/attr-notsent"
+start_stub 'PROBE_STUB_UNUSED=1'
+mkdir -p "$out/04-turn-02-req.json"
+run_step4 "$out"
+
+assert_ok 'a turn that could not be built says nothing was sent' \
+  grep -q 'was never sent' "$out/00-probe-log.txt"
+
+assert_not_ok 'a turn that was never sent is not reported as a clean pass' \
+  grep -q 'Every reply carried a call' "$out/00-probe-log.txt"
+
+assert_not_ok 'a turn that was never sent is not blamed on the model' \
+  grep -q 'First reply with no call' "$out/00-probe-log.txt"
+
+# The true positive. Without this the assertions above are satisfied by a probe
+# that simply never prints the line.
+out="$WORK/attr-ceiling"
+start_stub 'PROBE_STUB_UNUSED=1'
+PROBE_CONTEXT_LADDER='2000' PROBE_MAX_TURNS=2 bash "$PROBE" "$out" >/dev/null 2>&1
+
+assert_ok 'a run that really did call every turn says so' \
+  grep -q 'Every reply carried a call' "$out/00-probe-log.txt"
+
+assert_ok 'and names the ceiling as what stopped it, not the model' \
+  grep -q 'stopped at the 2-turn' "$out/00-probe-log.txt"
+
+# A write must not be answered with the file's contents. `cat > f` matching the
+# read branch told the model its read-back had already succeeded, ending the
+# conversation two turns before the turn the step exists to reach.
+observation=$(python3 - <<'PY'
+import re
+
+def observation_for(command):
+    last = re.split(r"&&|\|\||;", command)[-1].strip()
+    if ">" in last:
+        return ""
+    head = (last.split() or [""])[0]
+    if head in ("cat", "head", "tail"):
+        return "hello"
+    if head == "ls":
+        return "LISTING"
+    return ""
+
+print("|".join([
+    observation_for("cat > /workspace/hello.txt <<'EOF'\nhello\nEOF"),
+    observation_for("cat /workspace/hello.txt"),
+    observation_for("false"),
+    observation_for("ls -la /workspace"),
+]))
+PY
+)
+assert_eq 'a write is not answered as though the file had been read back' \
+  '|hello||LISTING' "$observation"
+
 finish

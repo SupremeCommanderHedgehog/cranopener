@@ -100,7 +100,11 @@ if (-not (Test-Path $Install)) {
 
 $PodName     = 'cranopener-gateway'
 $GatewayCtr  = "$PodName-litellm"
-$Image       = 'ghcr.io/supremecommanderhedgehog/cranopener:latest'
+# Overridable for locally built images. tests/integration/openhands-wire.sh
+# documents CRANOPENER_IMAGE and harness-run.ps1 pre-flights that same value,
+# so hardcoding here would let the preflight pass on an image this never runs.
+$Image       = if ($env:CRANOPENER_IMAGE) { $env:CRANOPENER_IMAGE }
+               else { 'ghcr.io/supremecommanderhedgehog/cranopener:latest' }
 $GatewayYaml = Join-Path $Install 'gateway.yaml'
 
 # Volume sources are Windows paths and `podman run -v` splits on ':', so they

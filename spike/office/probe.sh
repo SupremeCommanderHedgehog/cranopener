@@ -507,26 +507,241 @@ fi
 echo "  Providers usually name their own limit in the rejection. Read it out of"
 echo "  the captured body rather than inferring it from the bracket."
 
-# --- 4. Does a harness survive a real multi-turn task? ---------------------
-# The trip. Everything above is minutes; this is the question the visit exists
-# to answer, and it needs a real repository and a human watching, so it is run
-# by hand rather than from here.
-say '4. the multi-turn run (run this by hand)'
-cat <<EOF
-  In a scratch repository, with the gateway up:
+# --- 4. Does the model survive a multi-turn prompt-mode conversation? ------
+# The question the visit exists to answer, and until 2026-08-08 this step was a
+# `cat` of instructions telling the operator to run `cranopener` by hand. That
+# was wrong twice over: it left the decisive step to a human who is about to
+# leave a building, and the command it printed needs pwsh, podman, a 6GB image
+# and an installed ~/.cranopener -- none of which exist in the WSL2 VM the rest
+# of this kit runs in. Two visits produced no answer as a result.
+#
+# So this now runs here, over curl, using the same transport steps 1-3 just
+# proved. It is not the OpenHands harness and does not claim to be; what it
+# measures is the thing the harness depends on and the thing that cannot be
+# measured at a desk -- whether THIS MODEL keeps emitting parseable tool calls
+# once history has been flattened into text. Turn three is where that breaks if
+# it breaks. See harness-run.ps1 for the real-harness run on the Windows side.
+say '4a. multi-turn, prompt-mode tool calling (the model, over curl)'
+MAX_TURNS="${PROBE_MAX_TURNS:-10}"
+CONV="$OUT/04-conversation.json"
+echo "  up to $MAX_TURNS turns, tool definitions rendered into the prompt"
 
-    cranopener -Model $PROBE_MODEL "add a failing test, then make it pass" \\
-      2>&1 | tee $OUT/04-run.log
+# The syntax is OpenHands', copied from tests/fake-upstream/scripts/
+# openhands-multi-turn.json. Measuring a different syntax would measure a
+# different question.
+python3 - "$CONV" <<'PY'
+import json
+import sys
 
-  Then, still at the office and before leaving:
+SYSTEM = """You are a software engineer working in /workspace. You have one tool.
 
-    - record the turn count, whether it finished, and where it derailed
-    - if it derails, raise CRANOPENER_MAX_ITERATIONS and run it once more --
-      the default is a bound, not a budget, and a run stopped by the cap looks
-      a lot like a run that gave up
-    - keep 04-run.log whatever happens. It is the only record of this step,
-      and it is the step that cannot be repeated for a month.
-EOF
+To use it, emit EXACTLY this form, and nothing else after it:
+
+<function=terminal>
+<parameter=command>THE SHELL COMMAND</parameter>
+<parameter=security_risk>LOW</parameter>
+<parameter=summary>WHY</parameter>
+</function>
+
+You will be given the output of each command. Work one command at a time.
+When the task is complete, say TASK COMPLETE and stop calling the tool."""
+
+TASK = ("Create /workspace/hello.txt containing the single word hello, "
+        "then read it back to confirm it, then list the directory.")
+
+json.dump({"messages": [
+    {"role": "system", "content": SYSTEM},
+    {"role": "user", "content": TASK},
+]}, open(sys.argv[1], "w"))
+PY
+
+turn=1
+calls=0
+completed=0
+first_nocall=''
+# Why the loop ended. Empty means it ran out of turns; every other value names
+# a cause that is NOT the model, and the summary must not report those as one.
+stop=''
+while [ "$turn" -le "$MAX_TURNS" ]; do
+  label=$(printf '04-turn-%02d' "$turn")
+  printf '\n  -- turn %d --\n' "$turn"
+
+  # Cleared first. Unlike steps 1b-3, this body differs every turn, so a stale
+  # one from an interrupted run is non-empty and would pass request()'s guard.
+  rm -f "$OUT/$label-req.json"
+
+  python3 - "$CONV" "$OUT/$label-req.json" "$PROBE_MODEL" \
+    2>"$OUT/$label-generator-stderr.txt" <<'PY'
+import json
+import sys
+
+conv = json.load(open(sys.argv[1]))
+json.dump({
+    "model": sys.argv[3],
+    # Generous, because a reply cut off mid-call cannot be told from a model
+    # that lost the syntax, and that is the finding this step exists to make.
+    "max_tokens": 2048,
+    "messages": conv["messages"],
+}, open(sys.argv[2], "w"))
+PY
+
+  request "$label" POST /chat/completions "$OUT/$label-req.json"
+  req_rc=$?
+  # 3 and 1 are different findings and must not share a branch: 3 means nothing
+  # was sent, so there is no reply to read and nothing here concerns the model.
+  if [ "$req_rc" -eq 3 ]; then
+    stop='not-sent'
+    break
+  fi
+  if [ "$req_rc" -ne 0 ]; then
+    stop='request-failed'
+    break
+  fi
+
+  # Appends the reply and, if it carried a call, a fabricated observation.
+  # Prints CALL, NOCALL or TRUNCATED; exits non-zero if it could not read the
+  # reply at all, which is a third thing again and not a verdict.
+  verdict=$(python3 - "$CONV" "$OUT/$label-body.json" "$turn" \
+    2>"$OUT/$label-verdict-stderr.txt" <<'PY'
+import json
+import re
+import sys
+
+conv = json.load(open(sys.argv[1]))
+body = json.load(open(sys.argv[2]))
+
+choice = body["choices"][0]
+text = choice["message"].get("content") or ""
+conv["messages"].append({"role": "assistant", "content": text})
+
+
+def observation_for(command):
+    """What the agent would have seen. Fabricated, and deliberately plausible
+    rather than accurate -- the question is whether the model keeps its shape
+    as history grows, not whether a real filesystem agrees with it."""
+    # Only the last segment produces the stdout the agent sees, and a redirect
+    # makes it a write: `cat > hello.txt <<EOF` must not be answered with the
+    # file's contents, which would tell the model its read-back already
+    # succeeded and end the conversation two turns early.
+    last = re.split(r"&&|\|\||;", command)[-1].strip()
+    if ">" in last:
+        return ""
+    head = (last.split() or [""])[0]
+    if head in ("cat", "head", "tail"):
+        return "hello"
+    if head == "ls":
+        return ("total 4\ndrwxr-xr-x 2 opencode opencode 4096 .\n"
+                "-rw-r--r-- 1 opencode opencode 6 hello.txt")
+    return ""
+
+
+# The whole measurement. Anything looser -- searching for the word "function",
+# say -- would score prose about tools as a tool call and report success on a
+# model that never made one.
+match = re.search(r"<function=([A-Za-z0-9_]+)>(.*?)</function>", text, re.S)
+if match:
+    command = re.search(r"<parameter=command>(.*?)</parameter>",
+                        match.group(2), re.S)
+    conv["messages"].append({
+        "role": "user",
+        "content": "EXECUTION RESULT of [%s]:\n%s" % (
+            match.group(1),
+            observation_for(command.group(1).strip() if command else "")),
+    })
+    print("CALL %s" % match.group(1))
+elif choice.get("finish_reason") == "length":
+    # No closing tag because the reply was cut off, not because the model lost
+    # the syntax. Scoring this as NOCALL blames the model for our token cap.
+    print("TRUNCATED")
+else:
+    print("NOCALL")
+
+json.dump(conv, open(sys.argv[1], "w"))
+PY
+)
+  verdict_rc=$?
+  completed=$((completed + 1))
+  case "$verdict" in
+    CALL*)
+      calls=$((calls + 1))
+      echo "  parsed a tool call (${verdict#CALL })"
+      ;;
+    NOCALL)
+      # A reply with no call is where the conversation ended -- either the
+      # model finished or it lost the syntax -- and every further turn is a
+      # billed request that cannot distinguish those two. The text can.
+      echo "  no parseable tool call in this reply -- stopping"
+      first_nocall="$turn"
+      stop='nocall'
+      ;;
+    TRUNCATED)
+      echo "  the reply was cut off by max_tokens before any call closed -- stopping"
+      stop='truncated'
+      ;;
+    *)
+      echo "  !! the reply could not be read (helper exit $verdict_rc) -- stopping"
+      stop='unreadable'
+      ;;
+  esac
+  [ -n "$stop" ] && break
+  turn=$((turn + 1))
+done
+
+body_for() { printf '%s/04-turn-%02d-body.json' "$OUT" "$1"; }
+
+echo
+echo "  $completed turns, $calls carried a parseable tool call."
+# Only the empty and nocall cases are findings about the model. Every other
+# branch names the probe or the transport, because a run that says otherwise
+# gets read at a desk a week later as a verdict on the provider.
+case "$stop" in
+  '')
+    echo "  Every reply carried a call, and the run stopped at the $MAX_TURNS-turn"
+    echo "  ceiling rather than at the model. It never decided it was finished --"
+    echo "  read the last body, and raise PROBE_MAX_TURNS if it needed more room."
+    ;;
+  nocall)
+    echo "  First reply with no call: turn $first_nocall. That is either the model"
+    echo "  finishing or the model derailing, and only the text tells them apart --"
+    echo "  read $(body_for "$first_nocall")."
+    ;;
+  truncated)
+    echo "  !! Turn $turn hit max_tokens (finish_reason: length) before any call"
+    echo "     closed. That is THIS PROBE's ceiling, not the model losing the"
+    echo "     syntax. Raise max_tokens and re-run before recording anything"
+    echo "     about turn $turn. Reply: $(body_for "$turn")."
+    ;;
+  unreadable)
+    echo "  !! Turn $turn answered 2xx but the reply could not be read, so nothing"
+    echo "     here says whether the model called a tool. Read $(body_for "$turn")"
+    echo "     and $OUT/$label-verdict-stderr.txt."
+    ;;
+  not-sent)
+    echo "  !! Turn $turn was never sent: the probe could not build its request"
+    echo "     body. Nothing was asked, so nothing here is a finding about the"
+    echo "     model. Read $OUT/$label-generator-stderr.txt."
+    ;;
+  request-failed)
+    echo "  !! Turn $turn failed on the wire or was refused, so the conversation"
+    echo "     ended for transport reasons and not model ones. Read"
+    echo "     $(body_for "$turn") and $OUT/$label-curl-stderr.txt."
+    ;;
+esac
+echo "  Turn three is where flattened history breaks if it breaks; reaching"
+echo "  turn four with calls intact is the result that matters."
+echo "  Full conversation: $CONV"
+
+say 'step 4b is NOT done -- it runs on the Windows side'
+# The only in-run pointer to the other half. Without it a run ends at "done"
+# and the harness question waits another month.
+echo "  Everything above measured the MODEL over curl. The real harness --"
+echo "  OpenHands, in a container, against the gateway -- needs podman and the"
+echo "  image, so it does not run here:"
+echo
+echo "    pwsh -File spike\\office\\harness-run.ps1 -Model <gateway-model-id>"
+echo
+echo "  Run it before you leave the building. It checks its prerequisites and"
+echo "  starts nothing if any are missing."
 
 say 'done'
 echo "Raw bodies, headers, and transfer metadata: $OUT"

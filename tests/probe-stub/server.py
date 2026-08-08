@@ -42,6 +42,21 @@ HARD_MAX = int(os.environ.get("PROBE_STUB_HARD_MAX") or 0)
 EMPTY_ONCE = os.environ.get("PROBE_STUB_EMPTY_BODY_ONCE") == "1"
 _served_empty = []
 
+# A JSON file with a "responses" array of assistant texts, replayed one per
+# POST. Step 4 is a conversation, so testing it needs an upstream that can say
+# different things on different turns -- including, at a chosen turn, something
+# with no tool call in it.
+SCRIPT = os.environ.get("PROBE_STUB_SCRIPT", "")
+_responses = json.load(open(SCRIPT))["responses"] if SCRIPT else None
+_served = []
+
+# The three ways a turn can end without the model having decided anything. Each
+# names a 1-based conversation turn; step 4 must attribute all three to the
+# probe or the transport rather than reporting them as model behaviour.
+FAIL_TURN = int(os.environ.get("PROBE_STUB_FAIL_TURN") or 0)
+BAD_BODY_TURN = int(os.environ.get("PROBE_STUB_BAD_BODY_TURN") or 0)
+TRUNCATE_TURN = int(os.environ.get("PROBE_STUB_TRUNCATE_TURN") or 0)
+
 MODELS = {
     "object": "list",
     "data": [{"id": "stub-model", "object": "model", "owned_by": "stub"}],
@@ -99,14 +114,52 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "type": "invalid_request",
             }}, status=400)
             return
+        # Steps 1b, 2 and 3 are POSTs too, and they would eat the script before
+        # step 4 sent its first turn. They each carry exactly one message; the
+        # conversation carries a system prompt as well, and grows from there.
+        # Message count is what tells them apart without the stub having to
+        # know anything about the probe's internals.
+        is_conversation = False
+        try:
+            is_conversation = len(json.loads(raw).get("messages", [])) >= 2
+        except Exception:
+            pass
+
+        finish_reason = "stop"
+        if _responses and is_conversation:
+            turn = len(_served) + 1
+            if turn == FAIL_TURN:
+                self.reply({"error": {
+                    "message": "upstream connect error",
+                    "type": "server_error",
+                }}, status=502)
+                return
+            if turn == BAD_BODY_TURN:
+                # 200 with nothing the verdict helper can destructure. An
+                # intercepting proxy's error page arrives looking like this.
+                self.reply({"id": "chatcmpl-stub", "object": "chat.completion"})
+                return
+            # Past the end, repeat the last one rather than crashing: a stub
+            # that dies under an over-running loop turns a probe bug into a
+            # transport failure and sends the investigation to the wrong layer.
+            content = _responses[min(len(_served), len(_responses) - 1)]
+            if turn == TRUNCATE_TURN:
+                # Cut off mid-call: the opening tag is there, the closing one
+                # never arrives, and finish_reason says why.
+                content = content.split("</function>")[0]
+                finish_reason = "length"
+            _served.append(1)
+        else:
+            content = "ok"
+
         self.reply({
             "id": "chatcmpl-stub",
             "object": "chat.completion",
             "model": "stub-model",
             "choices": [{
                 "index": 0,
-                "finish_reason": "stop",
-                "message": {"role": "assistant", "content": "ok"},
+                "finish_reason": finish_reason,
+                "message": {"role": "assistant", "content": content},
             }],
             "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
         })
