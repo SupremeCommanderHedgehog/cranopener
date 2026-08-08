@@ -399,9 +399,11 @@ if [ "$tools_rc" -eq 0 ]; then
 fi
 
 # --- 3. How big is the context window? -------------------------------------
-# Still unmeasured, and it decides whether ~5,200 tokens of tool schema per
-# turn is 4% of the window or 64% -- see the table in spike/RESULTS.md, which
-# is gitignored and local.
+# Measured 2026-08-08 at ~160,000 tokens: an 800KB body was accepted at the top
+# rung and billed as prompt_tokens=160001. That puts ~5,200 tokens of tool
+# schema per turn at about 3% of the window -- see the table in
+# spike/RESULTS.md, which is gitignored and local. Re-run it anyway; it is one
+# request in the good case and the endpoint can change under us.
 #
 # Largest first, stopping at the first size the endpoint accepts. That order is
 # what makes this cheap in the good case: if the largest size is accepted the
