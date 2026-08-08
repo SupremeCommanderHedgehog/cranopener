@@ -50,6 +50,13 @@ SCRIPT = os.environ.get("PROBE_STUB_SCRIPT", "")
 _responses = json.load(open(SCRIPT))["responses"] if SCRIPT else None
 _served = []
 
+# The three ways a turn can end without the model having decided anything. Each
+# names a 1-based conversation turn; step 4 must attribute all three to the
+# probe or the transport rather than reporting them as model behaviour.
+FAIL_TURN = int(os.environ.get("PROBE_STUB_FAIL_TURN") or 0)
+BAD_BODY_TURN = int(os.environ.get("PROBE_STUB_BAD_BODY_TURN") or 0)
+TRUNCATE_TURN = int(os.environ.get("PROBE_STUB_TRUNCATE_TURN") or 0)
+
 MODELS = {
     "object": "list",
     "data": [{"id": "stub-model", "object": "model", "owned_by": "stub"}],
@@ -118,11 +125,29 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except Exception:
             pass
 
+        finish_reason = "stop"
         if _responses and is_conversation:
+            turn = len(_served) + 1
+            if turn == FAIL_TURN:
+                self.reply({"error": {
+                    "message": "upstream connect error",
+                    "type": "server_error",
+                }}, status=502)
+                return
+            if turn == BAD_BODY_TURN:
+                # 200 with nothing the verdict helper can destructure. An
+                # intercepting proxy's error page arrives looking like this.
+                self.reply({"id": "chatcmpl-stub", "object": "chat.completion"})
+                return
             # Past the end, repeat the last one rather than crashing: a stub
             # that dies under an over-running loop turns a probe bug into a
             # transport failure and sends the investigation to the wrong layer.
             content = _responses[min(len(_served), len(_responses) - 1)]
+            if turn == TRUNCATE_TURN:
+                # Cut off mid-call: the opening tag is there, the closing one
+                # never arrives, and finish_reason says why.
+                content = content.split("</function>")[0]
+                finish_reason = "length"
             _served.append(1)
         else:
             content = "ok"
@@ -133,7 +158,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             "model": "stub-model",
             "choices": [{
                 "index": 0,
-                "finish_reason": "stop",
+                "finish_reason": finish_reason,
                 "message": {"role": "assistant", "content": content},
             }],
             "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},

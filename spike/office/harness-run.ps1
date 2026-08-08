@@ -58,12 +58,15 @@ if (-not $OutFile) { $OutFile = Join-Path $PSScriptRoot 'out\04-harness-run.log'
 # missing PROBE_ variable at once.
 $missing = @()
 
+$podmanOk = $false
 if (-not (Get-Command podman -ErrorAction SilentlyContinue)) {
     $missing += 'podman is not on PATH'
 } else {
     podman info *> $null
     if ($LASTEXITCODE -ne 0) {
         $missing += 'podman is installed but not answering -- is the machine started? (podman machine start)'
+    } else {
+        $podmanOk = $true
     }
 }
 
@@ -85,7 +88,10 @@ if (-not (Test-Path $Install)) {
 
 $image = if ($env:CRANOPENER_IMAGE) { $env:CRANOPENER_IMAGE }
          else { 'ghcr.io/supremecommanderhedgehog/cranopener:latest' }
-if ($missing.Count -eq 0) {
+# Gated on podman answering, not on every other check passing. This is the
+# prerequisite that takes hours to fix, and reporting it one run later -- at
+# the office, over the office link -- costs the month.
+if ($podmanOk) {
     podman image exists $image
     if ($LASTEXITCODE -ne 0) {
         $missing += "no local image $image -- pull it before the visit, it is several GB"
@@ -104,27 +110,52 @@ if ($missing.Count -gt 0) {
 
 # --- run it ----------------------------------------------------------------
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $OutFile) | Out-Null
+# Truncated up front, so the file exists before anything can throw. Tee-Object
+# never gets to create it if the launcher does, and this log is the only record
+# of the step.
+[System.IO.File]::WriteAllText($OutFile, '')
 
-Write-Host "model:  $Model"
-Write-Host "task:   $Task"
-Write-Host "log:    $OutFile"
-Write-Host ''
-Write-Host 'Keep the log whatever happens. It is the only record of this step,' -ForegroundColor Yellow
-Write-Host 'and the next chance to produce one is a month away.' -ForegroundColor Yellow
-Write-Host ''
+# Console and log both. Write-Host alone leaves the framing -- which model,
+# which task, and the diagnostics below -- on a console at the office that is
+# about to close.
+function Write-Both {
+    param([string]$Message, [string]$Color = 'Gray')
+    Write-Host $Message -ForegroundColor $Color
+    Add-Content -Path $OutFile -Value $Message
+}
+
+Write-Both "model:  $Model"
+Write-Both "task:   $Task"
+Write-Both "log:    $OutFile"
+Write-Both ''
+Write-Both 'Keep the log whatever happens. It is the only record of this step,' 'Yellow'
+Write-Both 'and the next chance to produce one is a month away.' 'Yellow'
+Write-Both ''
 
 # No `run` verb: on the OpenHands path the whole argument list is the task, and
 # the launcher refuses the combination rather than absorbing it.
-& $Launcher -Model $Model $Task 2>&1 | Tee-Object -FilePath $OutFile
-$rc = $LASTEXITCODE
+#
+# Wrapped because cranopener.ps1 signals its refusals with `throw` -- a missing
+# install, a contradictory flag, a gateway that would not start. With
+# $ErrorActionPreference = 'Stop' that unwinds straight through this script:
+# $rc is never read, `exit` never runs, and the log is left empty.
+$rc = 0
+try {
+    & $Launcher -Model $Model $Task 2>&1 | Tee-Object -FilePath $OutFile -Append
+    $rc = $LASTEXITCODE
+} catch {
+    Write-Both "the launcher threw before it could exit: $($_.Exception.Message)" 'Red'
+    Add-Content -Path $OutFile -Value $_.ScriptStackTrace
+    $rc = 1
+}
 
-Write-Host ''
-Write-Host "exit status: $rc"
+Write-Both ''
+Write-Both "exit status: $rc"
 if ($rc -ne 0) {
-    Write-Host 'Non-zero is a real finding on this path, not noise: the adapter takes' -ForegroundColor Yellow
-    Write-Host 'its verdict from the event stream because the CLI underneath exits 0' -ForegroundColor Yellow
-    Write-Host 'even when every request failed. Read the log for which bound stopped it.' -ForegroundColor Yellow
-    Write-Host 'If it was the iteration cap, raise CRANOPENER_MAX_ITERATIONS and rerun --' -ForegroundColor Yellow
-    Write-Host 'a run stopped by the cap looks a lot like a run that gave up.' -ForegroundColor Yellow
+    Write-Both 'Non-zero is a real finding on this path, not noise: the adapter takes' 'Yellow'
+    Write-Both 'its verdict from the event stream because the CLI underneath exits 0' 'Yellow'
+    Write-Both 'even when every request failed. Read the log for which bound stopped it.' 'Yellow'
+    Write-Both 'If it was the iteration cap, raise CRANOPENER_MAX_ITERATIONS and rerun --' 'Yellow'
+    Write-Both 'a run stopped by the cap looks a lot like a run that gave up.' 'Yellow'
 }
 exit $rc

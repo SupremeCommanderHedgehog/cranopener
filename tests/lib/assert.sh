@@ -27,6 +27,19 @@ assert_ok() {
   fi
 }
 
+# For asserting a string is ABSENT. `assert_ok ! grep ...` does not work: the
+# helper runs its arguments as a command, and `!` is shell syntax.
+assert_not_ok() {
+  local desc="$1"; shift
+  TESTS_RUN=$((TESTS_RUN + 1))
+  if "$@" >/dev/null 2>&1; then
+    TESTS_FAILED=$((TESTS_FAILED + 1))
+    printf 'FAIL %s (command unexpectedly succeeded: %s)\n' "$desc" "$*"
+  else
+    printf 'ok   %s\n' "$desc"
+  fi
+}
+
 finish() {
   printf '\n%s: %d run, %d failed\n' "${0##*/}" "$TESTS_RUN" "$TESTS_FAILED"
   [ "$TESTS_FAILED" -eq 0 ]

@@ -76,21 +76,65 @@ per-tool measurement this percentage comes from):
 
 - Verdict: `<fine | trim the tool set | cut tools first>`
 
-## 4. The multi-turn run
+## 4a. The multi-turn run — the model, over curl
 
-Files: `out/04-run.log`
+Files: `out/04-turn-*`, `out/04-conversation.json`, and the summary at the end
+of `out/00-probe-log.txt`
+
+This is the half that always runs. It measures the **model**, not the harness:
+whether it keeps emitting parseable tool calls once the history has been
+flattened into text. Nothing here depends on podman, the image, or an install,
+so it answers even on a visit where 4b cannot be attempted.
+
+- Turns completed: `<n>`
+- Turns carrying a parseable tool call: `<n>`
+- First reply with no call: `<turn n | none — every reply carried one>`
+- That reply was: `<the model finishing | the model losing the syntax>`
+- Did any tool call parse at all: `<yes | no>`
+- Verdict: `<keeps its shape | derails mid-loop | never parses>`
+
+The probe stops at the first reply with no call, deliberately: past that point
+every turn is a billed request that cannot tell "finished" from "derailed".
+Only the text can. **Read `out/04-turn-<n>-body.json` and decide which it was**
+— the counter alone reports both the same way, and the two land on different
+rows of the decision table.
+
+Reaching **turn four with calls intact** is the result that matters. Turn three
+is where flattened history breaks if it breaks.
+
+If every reply carried a call and it never stopped, it never decided it was
+finished either. Read the last body before calling that a pass.
+
+## 4b. The multi-turn run — the real harness
+
+Files: `out/04-harness-run.log` (from `harness-run.ps1`, run on the Windows
+side where podman and the image live)
+
+Attempted: `<yes | no — prerequisites missing, list them>`
+
+Not attempted is a legitimate outcome and not a lost step: 4a measures the
+thing that cannot be measured at a desk, and this adds the real harness on top
+of it. Say which prerequisite was missing so the next visit can arrive with it.
 
 - `CRANOPENER_MAX_ITERATIONS` used: `<n>`
-- Turns reached: `<n>`
 - Completed the task: `<yes | no>`
 - Stopped by: `<finished | iteration cap | wall clock | conversation error | derailed>`
+- Exit status: `<n>`
 - Where it derailed:
-- Did any tool call parse at all: `<yes | no>`
 - Verdict: `<ship | tune config and retest | switch to aider | both failed>`
 
 A run stopped at the iteration cap is not a failed run. The cap is a bound and
 not a budget; if that is what ended it, raise it and go again while the
 endpoint is still in reach.
+
+Non-zero exit is a real finding on this path rather than noise: the adapter
+takes its verdict from the event stream because the CLI underneath exits 0 even
+when every request failed.
+
+**Where 4a and 4b disagree, 4b is the finding and 4a is the diagnosis.** A model
+that keeps its shape over curl while the harness derails is a harness or
+configuration problem, and that is the fourth row of the decision table — the
+one to guard hardest.
 
 ---
 
